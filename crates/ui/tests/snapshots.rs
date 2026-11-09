@@ -216,14 +216,19 @@ fn art() {
 }
 
 #[test]
+fn last_song() {
+    let art = test_art();
+    let mut s = base(Screen::Idle(IdleMode::LastSong));
+    s.art = Some(&art);
+    check("last_song", &s);
+    // Nothing has played yet: falls back to the digital clock.
+    s.art = None;
+    check("last_song_no_cover", &s);
+}
+
+#[test]
 fn mode_labels() {
-    for mode in [
-        IdleMode::DigitalClock,
-        IdleMode::AnalogClock,
-        IdleMode::Weather,
-        IdleMode::ClockWeather,
-        IdleMode::Off,
-    ] {
+    for mode in IdleMode::CYCLE {
         let mut s = base(Screen::Idle(mode));
         s.view.notice = Some(Notice::Mode(mode));
         check(&format!("mode_{mode:?}").to_lowercase(), &s);

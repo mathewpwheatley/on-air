@@ -63,6 +63,8 @@ button:disabled { opacity: .45; cursor: default; }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 /* Side by side, each group's options stack so they never wrap oddly. */
 .pair .choices { flex-direction: column; gap: 0; }
+input[type=range] { width: 100%; margin: 8px 0 0; }
+.scale { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); }
 .choices label, .check { display: flex; align-items: center; gap: 8px; color: var(--text); margin: 6px 0; }
 .error { color: var(--error); font-size: .85rem; margin-top: 4px; }
 .error:empty { display: none; }
@@ -144,7 +146,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
   <section id="step-display">
     <button class="head" type="button">
       <span class="step">3</span>
-      <span class="title"><b>Clock and weather</b><span class="summary"></span></span>
+      <span class="title"><b>Settings</b><span class="summary"></span></span>
       <span class="edit">Edit</span>
     </button>
     <div class="body">
@@ -174,6 +176,10 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
             </div>
           </div>
         </div>
+        <label for="idle-minutes">Show the idle screen after <b id="idle-label">5 minutes</b> with nothing playing</label>
+        <input type="range" id="idle-minutes" name="idle_minutes" min="1" max="30" step="1" value="5">
+        <div class="scale"><span>1 min</span><span>30 min</span></div>
+        <div class="error" data-error="idle_minutes"></div>
         <button class="action" type="submit">Save</button>
         <div class="status" id="display-status"></div>
       </form>
@@ -190,7 +196,9 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
 <script>
 const $ = (s) => document.querySelector(s);
 const STEPS = ["#step-wifi", "#step-spotify", "#step-display"];
-const state = { wifi: false, ssid: "", spotify: false, city: "", units: "c", clock: "12" };
+const state = { wifi: false, ssid: "", spotify: false, city: "", units: "c", clock: "12", idle: 5 };
+
+const minutes = (n) => `${n} minute${n == 1 ? "" : "s"}`;
 
 async function api(path, data) {
   const options = data
@@ -234,7 +242,7 @@ function refresh() {
   const place = state.city || "No city yet";
   const units = state.units === "f" ? "°F" : "°C";
   const clock = state.clock === "24" ? "24-hour" : "12-hour";
-  setSummary("#step-display", `${place} · ${units} · ${clock}`, !!state.city);
+  setSummary("#step-display", `${place} · ${units} · ${clock} · idle after ${state.idle} min`, !!state.city);
   $("#connect-spotify").disabled = !state.wifi;
   if (!state.wifi) setStatus($("#spotify-status"), "Connect WiFi first, so On-Air can reach Spotify.");
   else if ($("#spotify-status").textContent.startsWith("Connect WiFi")) setStatus($("#spotify-status"), "");
@@ -261,7 +269,7 @@ async function loadStatus() {
   $("#network-name").textContent = s.network_name;
   Object.assign(state, {
     wifi: s.wifi === "connected", ssid: s.wifi_ssid, spotify: s.spotify_signed_in,
-    city: s.city, units: s.units, clock: s.clock,
+    city: s.city, units: s.units, clock: s.clock, idle: s.idle_minutes,
   });
   $("#client-id").value = s.spotify_client_id || "";
   if (s.city) {
@@ -271,6 +279,8 @@ async function loadStatus() {
   }
   document.querySelector(`input[name=units][value="${s.units}"]`).checked = true;
   document.querySelector(`input[name=clock][value="${s.clock}"]`).checked = true;
+  $("#idle-minutes").value = s.idle_minutes;
+  $("#idle-label").textContent = minutes(s.idle_minutes);
   refresh();
   openStep(nextStep());
 }
@@ -356,6 +366,10 @@ $("#spotify-finish").addEventListener("submit", async (e) => {
   openStep("#step-display");
 });
 
+$("#idle-minutes").addEventListener("input", (e) => {
+  $("#idle-label").textContent = minutes(e.target.value);
+});
+
 $("#city-button").addEventListener("click", async () => {
   const query = $("#city-search").value.trim();
   if (!query) return;
@@ -406,7 +420,7 @@ $("#display-form").addEventListener("submit", async (e) => {
     if (reply.message) setStatus($("#display-status"), reply.message, "bad");
     return;
   }
-  Object.assign(state, { city, units: data.get("units"), clock: data.get("clock") });
+  Object.assign(state, { city, units: data.get("units"), clock: data.get("clock"), idle: Number(data.get("idle_minutes")) });
   refresh();
   openStep(nextStep());
   $("#finish").scrollIntoView({ behavior: "smooth" });

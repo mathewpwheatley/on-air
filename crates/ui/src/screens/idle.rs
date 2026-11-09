@@ -1,4 +1,5 @@
-//! Idle screens: digital clock, analog clock, weather, clock + weather, none.
+//! Idle screens: analog clock, digital clock, weather, clock + weather, last
+//! song, none.
 
 use embedded_graphics::{
     pixelcolor::Rgb888,
@@ -11,6 +12,7 @@ use on_air_core::weather::Units;
 use u8g2_fonts::FontRenderer;
 
 use crate::icons::{self, Icon};
+use crate::screens::art;
 use crate::text::{
     self, Align, DIM, GREY, LARGE, MEDIUM, MEDIUM_LARGE, SMALL, ShortText, TINY, WHITE,
 };
@@ -31,6 +33,12 @@ where
         IdleMode::AnalogClock => analog_clock(scene.time, target),
         IdleMode::Weather => weather(scene.weather, target),
         IdleMode::ClockWeather => clock_weather(scene.time, scene.clock_24h, scene.weather, target),
+        // Dimmed like a paused cover, since nothing is playing.
+        IdleMode::LastSong => match scene.art {
+            Some(cover) => art::draw(Some(cover), true, target),
+            // Nothing has played since power-up, so there's no cover yet.
+            None => digital_clock(scene.time, scene.clock_24h, target),
+        },
         IdleMode::Off => Ok(()),
     }
 }

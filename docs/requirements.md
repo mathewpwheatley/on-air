@@ -45,7 +45,7 @@ On-Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 | D-3 | Fetch and decode the 64×64 JPEG that Spotify provides for each album, so no resizing is needed. If no 64 px image exists, downscale the smallest available. |
 | D-4 | Crossfade between covers over about 300 ms. |
 | D-5 | When playback is paused, dim the art to about 40% of the current brightness. |
-| D-6 | Idle screens, cycled with the mode button: **Analog clock**, **Digital clock**, **Weather**, **Clock + weather**, or **None** (panel dark). Each Mode tap first shows "IDLE MODE", the mode's name and a row of position dots for about 1.5 s. Enter the idle screen after nothing has played for a configurable period (default 1 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
+| D-6 | Idle screens, cycled with the mode button: **Analog clock**, **Digital clock**, **Weather**, **Clock + weather**, **Last song** (the most recent cover stays on screen, dimmed like a paused cover; the digital clock until something has played since power-up), or **None** (panel dark). Each Mode tap first shows "IDLE MODE", the mode's name and a row of position dots for about 1.5 s. Enter the idle screen after nothing has played for the owner's idle time (set in the portal, 1–30 min, default 5 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
 | D-7 | Status screens: setup instructions plus a WiFi-join QR code, "Connecting…", "Spotify sign-in needed", and a "No WiFi" error icon. |
 | D-8 | Brightness from the knob scales the whole framebuffer. Firmware caps the total estimated current below the power supply's rating (see §5.2). |
 | D-9 | **Clock:** time comes from SNTP in the configured timezone. Digital shows HH:MM (12 h or 24 h, configurable) with the date underneath. Analog shows a round face with hour and minute hands, updated every minute. Before the first SNTP sync, show "--:--" instead of a wrong time. |
@@ -62,8 +62,8 @@ stateDiagram-v2
     Paused: Album art dimmed to about 40%
     Playing --> Paused: pause
     Paused --> Playing: play
-    Playing --> Idle: nothing playing for 1 min
-    Paused --> Idle: nothing played for 1 min
+    Playing --> Idle: nothing playing for the idle time
+    Paused --> Idle: nothing played for the idle time
     Idle --> Playing: playback starts
 
     state Idle {
@@ -72,11 +72,13 @@ stateDiagram-v2
         Analog: Analog clock
         Weather: Weather
         ClockWeather: Clock + weather
+        LastSong: Last song (most recent cover)
         Off: None (panel dark)
         Analog --> Digital: Mode tap
         Digital --> Weather: Mode tap
         Weather --> ClockWeather: Mode tap
-        ClockWeather --> Off: Mode tap
+        ClockWeather --> LastSong: Mode tap
+        LastSong --> Off: Mode tap
         Off --> Analog: Mode tap
     }
 ```
@@ -87,7 +89,7 @@ stateDiagram-v2
 |---|---|
 | S-1 | Authenticate with OAuth 2.0 Authorization Code + PKCE. The device never stores a client secret. |
 | S-2 | Store the refresh token in flash. Spotify may return a new refresh token on each refresh, so save it whenever it does. |
-| S-3 | Poll `GET /v1/me/player/currently-playing` every 5 s while playing, every 30 s while idle, and every 60 s after 30 min with nothing playing. Poll again about 0.4 s after any playback button, so the panel catches up right away. Also schedule a poll for the moment the current track should end, using `progress_ms` and `duration_ms`. |
+| S-3 | Poll `GET /v1/me/player/currently-playing` every 5 s while playing, every 30 s while idle, and every 60 s after 30 min with nothing playing. After any playback button, poll quickly (0.4 s, then 0.6, 1, 1.5 and 2 s apart) until Spotify reports the change, since it can take a second or two to show a skip. Also schedule a poll for the moment the current track should end, using `progress_ms` and `duration_ms`. |
 | S-4 | Handle `204 No Content` (nothing playing), `401` (refresh the token and retry once), and `429` (honour the `Retry-After` header). |
 | S-5 | Re-download art only when the album image URL changes. Cache the last cover in RAM. |
 | S-6 | Buttons call `PUT /me/player/play`, `PUT /me/player/pause`, `POST /me/player/next` and `POST /me/player/previous`. Requires Spotify Premium. Fail gracefully without it. |
@@ -109,7 +111,7 @@ stateDiagram-v2
 |---|---|
 | P-1 | If no WiFi credentials are stored, or the stored network can't be joined after 30 s, start a soft AP named `OnAir-Setup-XXXX` (last 4 hex digits of the MAC). |
 | P-2 | Run a DNS responder that answers every query with the device's IP, so phones open the captive-portal page automatically. |
-| P-3 | The portal page has four steps: **WiFi** (nearby networks or a typed name, and the password), **Spotify** (Client ID, the app setup instructions and a **Connect Spotify** link), **Clock and weather** (city search, required since it sets the clock's timezone; temperature units; 12/24 h clock) and **Finish**. The clock's timezone comes from the chosen city. |
+| P-3 | The portal page has four steps: **WiFi** (nearby networks or a typed name, and the password), **Spotify** (Client ID, the app setup instructions and a **Connect Spotify** link), **Settings** (city search, required since it sets the clock's timezone; temperature units; 12/24 h clock; idle time, 1–30 min) and **Finish**. The clock's timezone comes from the chosen city. |
 | P-4 | **Spotify sign-in (paste-back flow):** the link opens Spotify's authorize page with `redirect_uri=http://127.0.0.1:8888/callback`. After approval the browser lands on a page that fails to load. The user copies that full URL into the portal. The device extracts `code` and exchanges it, together with its stored PKCE verifier, for tokens. To reach Spotify, the device joins the home WiFi while keeping the setup AP running (AP+STA mode). See Q-4. *(This is needed because Spotify only accepts HTTPS or loopback redirect URIs, and the device can't serve HTTPS with a trusted certificate.)* |
 | P-5 | On success, save the settings, show a confirmation, and reboot into normal mode. |
 | P-6 | Holding **Mode** for 5 s at any time reopens the portal. Holding **Mode + Play** for 10 s erases all settings. |
@@ -142,7 +144,7 @@ sequenceDiagram
 | Button 1 | GPIO, internal pull-up | Play/Pause: tap to play or pause, hold 2 s to show track info |
 | Button 2 | GPIO | Previous |
 | Button 3 | GPIO | Next |
-| Button 4 | GPIO | Mode: tap to cycle the idle screen (analog clock → digital clock → weather → clock + weather → none), hold 5 s for the portal |
+| Button 4 | GPIO | Mode: tap to cycle the idle screen (analog clock → digital clock → weather → clock + weather → last song → none), hold 5 s for the portal |
 
 Buttons are debounced in software (20 ms) and give quick visual feedback on the panel (a small icon for about 500 ms).
 
@@ -305,7 +307,8 @@ stateDiagram-v2
 | `wifi.ssid` / `wifi.pass` | WiFi credentials |
 | `spotify.client_id` | From the owner's Spotify developer app |
 | `spotify.refresh_token` | Rewritten whenever Spotify rotates it |
-| `ui.idle_mode` | `clock_digital` / `clock_analog` / `weather` / `clock_weather` / `off` |
+| `ui.idle_after_min` | Minutes with nothing playing before the idle screen shows, 1–30 (default 5) |
+| `ui.idle_mode` | `clock_digital` / `clock_analog` / `weather` / `clock_weather` / `last_song` / `off` |
 | `ui.timezone` | IANA timezone name for the clock, e.g. `America/Los_Angeles` |
 | `ui.clock_24h` | `true` / `false` |
 | `weather.city` | City name as typed in the portal |

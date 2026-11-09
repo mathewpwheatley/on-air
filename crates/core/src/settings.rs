@@ -12,6 +12,10 @@ use crate::weather::Units;
 
 pub const SCHEMA_VERSION: u8 = 1;
 
+/// Idle time choices in the portal, in minutes.
+pub const IDLE_AFTER_MIN_RANGE: core::ops::RangeInclusive<u8> = 1..=30;
+pub const DEFAULT_IDLE_AFTER_MIN: u8 = 5;
+
 /// The idle screens. The Mode-button order is set by [`IdleMode::next`].
 /// Variant order is part of the stored settings format: only append.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,18 +26,25 @@ pub enum IdleMode {
     Weather,
     ClockWeather,
     Off,
+    /// The most recent cover, kept on screen.
+    LastSong,
 }
 
 impl IdleMode {
     /// The screen after this one when Mode is tapped.
+    /// Every idle screen, in Mode-button order.
+    pub const CYCLE: [IdleMode; 6] = [
+        IdleMode::AnalogClock,
+        IdleMode::DigitalClock,
+        IdleMode::Weather,
+        IdleMode::ClockWeather,
+        IdleMode::LastSong,
+        IdleMode::Off,
+    ];
+
     pub fn next(self) -> Self {
-        match self {
-            IdleMode::AnalogClock => IdleMode::DigitalClock,
-            IdleMode::DigitalClock => IdleMode::Weather,
-            IdleMode::Weather => IdleMode::ClockWeather,
-            IdleMode::ClockWeather => IdleMode::Off,
-            IdleMode::Off => IdleMode::AnalogClock,
-        }
+        let i = Self::CYCLE.iter().position(|&m| m == self).unwrap_or(0);
+        Self::CYCLE[(i + 1) % Self::CYCLE.len()]
     }
 
     /// Whether this screen needs weather data, so fetching can stop
@@ -64,6 +75,8 @@ pub struct Settings {
     pub clock_24h: bool,
     pub weather: Option<WeatherLocation>,
     pub units: Units,
+    /// Minutes with nothing playing before the idle screen shows.
+    pub idle_after_min: u8,
 }
 
 impl Default for Settings {
@@ -78,6 +91,7 @@ impl Default for Settings {
             clock_24h: false,
             weather: None,
             units: Units::default(),
+            idle_after_min: DEFAULT_IDLE_AFTER_MIN,
         }
     }
 }
@@ -106,6 +120,12 @@ impl Settings {
             }
             _ => Err(SettingsError::UnknownVersion),
         }
+    }
+
+    /// The idle time in milliseconds, kept within the allowed range.
+    pub fn idle_after_ms(&self) -> u64 {
+        let range = IDLE_AFTER_MIN_RANGE;
+        self.idle_after_min.clamp(*range.start(), *range.end()) as u64 * 60_000
     }
 
     /// Whether there's enough to join WiFi.
@@ -140,6 +160,7 @@ mod tests {
                 lon: -122.68,
             }),
             units: Units::Fahrenheit,
+            idle_after_min: 12,
         }
     }
 
@@ -167,6 +188,16 @@ mod tests {
     }
 
     #[test]
+    fn idle_time_defaults_to_five_minutes_and_stays_in_range() {
+        assert_eq!(Settings::default().idle_after_ms(), 5 * 60_000);
+        let mut s = sample();
+        s.idle_after_min = 0;
+        assert_eq!(s.idle_after_ms(), 60_000);
+        s.idle_after_min = 99;
+        assert_eq!(s.idle_after_ms(), 30 * 60_000);
+    }
+
+    #[test]
     fn completeness() {
         assert!(!Settings::default().has_wifi());
         assert!(sample().is_complete());
@@ -176,10 +207,10 @@ mod tests {
     }
 
     #[test]
-    fn idle_mode_cycles_through_all_five() {
+    fn idle_mode_cycles_through_all_six() {
         let mut m = IdleMode::AnalogClock;
         let mut seen = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..6 {
             seen.push(m);
             m = m.next();
         }
@@ -191,6 +222,7 @@ mod tests {
                 IdleMode::DigitalClock,
                 IdleMode::Weather,
                 IdleMode::ClockWeather,
+                IdleMode::LastSong,
                 IdleMode::Off
             ]
         );

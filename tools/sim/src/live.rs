@@ -2,6 +2,8 @@
 //! device. Only the HTTP client differs.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -9,8 +11,8 @@ use on_air_core::app::{CommandFailure, NetStatus};
 use on_air_core::auth::{self, Pkce, TokenError, Tokens};
 use on_air_core::backoff::Backoff;
 use on_air_core::image;
-use on_air_core::schedule::{self, PollState};
-use on_air_core::spotify::{self, Command, CommandResult, Method, PlayerResponse};
+use on_air_core::schedule::{self, FollowUp, PollState};
+use on_air_core::spotify::{self, Command, CommandResult, Method, NowPlaying, PlayerResponse};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
@@ -170,6 +172,7 @@ fn read(response: Response) -> Result<(u16, Option<String>, Vec<u8>), Failure> {
 pub fn run(
     client_id: String,
     record: Option<PathBuf>,
+    idle_after_ms: Arc<AtomicU64>,
     updates: Sender<Update>,
     controls: Receiver<Control>,
 ) {
@@ -209,7 +212,13 @@ pub fn run(
             refresh_token: token,
             token: None,
         };
-        match poll(&mut spotify, record.as_deref(), &updates, &controls) {
+        match poll(
+            &mut spotify,
+            record.as_deref(),
+            &idle_after_ms,
+            &updates,
+            &controls,
+        ) {
             Exit::SignInNeeded => {
                 eprintln!("spotify: signed out, starting sign-in again");
                 let _ = std::fs::remove_file(session_path());
@@ -227,6 +236,7 @@ enum Exit {
 fn poll(
     spotify: &mut Spotify,
     record: Option<&Path>,
+    idle_after_ms: &AtomicU64,
     updates: &Sender<Update>,
     controls: &Receiver<Control>,
 ) -> Exit {
@@ -236,6 +246,9 @@ fn poll(
     let mut not_playing_since: Option<Instant> = None;
     let mut recorded_item: Option<String> = None;
     let mut recorded = 0;
+    // What the last poll found, and quick polling after a button press.
+    let mut latest: Option<NowPlaying> = None;
+    let mut follow_up: Option<FollowUp> = None;
 
     loop {
         match controls.recv_timeout(Duration::from_millis(delay_ms as u64)) {
@@ -258,7 +271,9 @@ fn poll(
                         let _ = updates.send(Update::CommandFailed(CommandFailure::Other));
                     }
                 }
-                delay_ms = schedule::POLL_AFTER_COMMAND_MS;
+                let quick = FollowUp::new(command, latest.as_ref());
+                delay_ms = quick.first_delay_ms();
+                follow_up = Some(quick);
                 continue;
             }
             Ok(Control::StopPlayback) | Err(RecvTimeoutError::Timeout) => {}
@@ -314,11 +329,13 @@ fn poll(
                         for_ms: since.elapsed().as_millis() as u64,
                     }
                 };
+                latest = Some(now_playing.clone());
                 let _ = updates.send(Update::NowPlaying(Some(now_playing)));
                 state
             }
             PlayerResponse::Nothing => {
                 backoff.reset();
+                latest = None;
                 let _ = updates.send(Update::NowPlaying(None));
                 let since = *not_playing_since.get_or_insert_with(Instant::now);
                 PollState::NotPlaying {
@@ -340,7 +357,13 @@ fn poll(
                 continue;
             }
         };
-        delay_ms = schedule::next_poll_ms(state);
+        delay_ms = schedule::next_poll_ms(state, idle_after_ms.load(Ordering::Relaxed));
+        if let Some(quick) = &mut follow_up {
+            match quick.after_poll(latest.as_ref()) {
+                Some(quick_ms) => delay_ms = delay_ms.min(quick_ms),
+                None => follow_up = None,
+            }
+        }
     }
 }
 

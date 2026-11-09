@@ -8,7 +8,8 @@ mod portal;
 mod weather;
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
@@ -19,7 +20,7 @@ use embedded_graphics_simulator::{
 };
 use on_air_core::app::{Action, App, Event, NetStatus, Playback};
 use on_air_core::input::{ADC_MAX, Buttons, DEFAULT_FLOOR, InputEvent, Knob, POLL_INTERVAL_MS};
-use on_air_core::settings::{IdleMode, Settings, WeatherLocation};
+use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, IdleMode, Settings, WeatherLocation};
 use on_air_core::spotify::NowPlaying;
 use on_air_core::timezone::{self, TimeZone};
 use on_air_core::weather::{Reading, STALE_AFTER_S, Units};
@@ -38,7 +39,7 @@ Keys:
 Setup portal: hold 4 for 5 s (or start with --portal), then use http://127.0.0.1:8080";
 
 /// Environment variables the options read, e.g. from `.env`.
-const ENV_KEYS: [&str; 8] = [
+const ENV_KEYS: [&str; 9] = [
     "SPOTIFY_CLIENT_ID",
     "ON_AIR_LIVE",
     "ON_AIR_CITY",
@@ -46,6 +47,7 @@ const ENV_KEYS: [&str; 8] = [
     "ON_AIR_CLOCK_24H",
     "ON_AIR_TIMEZONE",
     "ON_AIR_RECORD",
+    "ON_AIR_IDLE_MINUTES",
     "ON_AIR_SCALE",
 ];
 
@@ -76,6 +78,10 @@ struct Args {
     /// Save each new currently-playing response to this folder (with --live).
     #[arg(long, env = "ON_AIR_RECORD")]
     record: Option<PathBuf>,
+    /// Minutes with nothing playing before the idle screen shows.
+    #[arg(long, env = "ON_AIR_IDLE_MINUTES", default_value_t = DEFAULT_IDLE_AFTER_MIN,
+          value_parser = clap::value_parser!(u8).range(1..=30))]
+    idle_minutes: u8,
     /// Open the setup portal at start, as if Mode had been held for 5 s.
     #[arg(long)]
     portal: bool,
@@ -117,6 +123,7 @@ fn portal_settings(args: &Args, units: Units, clock_24h: bool) -> Settings {
         }),
         units,
         clock_24h,
+        idle_after_min: args.idle_minutes,
         ..Settings::default()
     }
 }
@@ -147,6 +154,8 @@ fn main() {
     let (update_tx, updates) = mpsc::channel::<Update>();
     let (controls, control_rx) = mpsc::channel::<Control>();
 
+    // Shared with the Spotify thread, which polls more slowly once idle.
+    let idle_after_ms = Arc::new(AtomicU64::new(args.idle_minutes as u64 * 60_000));
     if args.live {
         let Some(client_id) = args.client_id.clone().filter(|id| !id.trim().is_empty()) else {
             eprintln!(
@@ -154,8 +163,12 @@ fn main() {
             );
             std::process::exit(2);
         };
-        let (tx, record) = (update_tx.clone(), args.record.clone());
-        std::thread::spawn(move || live::run(client_id, record, tx, control_rx));
+        let (tx, record, idle) = (
+            update_tx.clone(),
+            args.record.clone(),
+            idle_after_ms.clone(),
+        );
+        std::thread::spawn(move || live::run(client_id, record, idle, tx, control_rx));
     } else {
         let tx = update_tx.clone();
         std::thread::spawn(move || fake::run(tx, control_rx));
@@ -207,6 +220,7 @@ fn main() {
     // A made-up MAC address; the device uses its real one.
     let setup_network = on_air_core::setup::network_name([0x34, 0x85, 0x18, 0x00, 0x1a, 0x2b]);
     let mut app = App::new(IdleMode::DigitalClock);
+    app.set_idle_after_ms(idle_after_ms.load(Ordering::Relaxed));
     let mut track: Option<NowPlaying> = None;
     let mut buttons = Buttons::new();
     let mut knob = Knob::new(DEFAULT_FLOOR);
@@ -327,6 +341,7 @@ fn main() {
                     Action::FactoryReset => {
                         println!("factory reset");
                         app = App::new(IdleMode::DigitalClock);
+                        app.set_idle_after_ms(idle_after_ms.load(Ordering::Relaxed));
                         app.handle(Event::Net(NetStatus::Online), now);
                     }
                 }
@@ -374,6 +389,8 @@ fn main() {
                 Update::Weather(reading) => weather = Some((reading, Instant::now())),
                 Update::DisplaySaved(settings) => {
                     clock_24h = settings.clock_24h;
+                    app.set_idle_after_ms(settings.idle_after_ms());
+                    idle_after_ms.store(settings.idle_after_ms(), Ordering::Relaxed);
                     if let Some(found) = timezone::find(&settings.timezone) {
                         zone = found;
                     }

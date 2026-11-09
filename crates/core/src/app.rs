@@ -5,7 +5,6 @@
 //! from any monotonic clock.
 
 use crate::input::{Button, InputEvent};
-use crate::schedule::IDLE_AFTER_MS;
 use crate::settings::IdleMode;
 use crate::spotify::Command;
 
@@ -132,21 +131,23 @@ pub struct App {
 }
 
 impl App {
+    /// Starts with the default idle time; see [`App::set_idle_after_ms`].
     pub fn new(idle_mode: IdleMode) -> Self {
-        Self::with_idle_after(idle_mode, IDLE_AFTER_MS)
-    }
-
-    pub fn with_idle_after(idle_mode: IdleMode, idle_after_ms: u64) -> Self {
         Self {
             net: NetStatus::Connecting,
             ever_online: false,
             signed_in: true,
             play: PlayState::Unknown,
             idle_mode,
-            idle_after_ms,
+            idle_after_ms: crate::settings::DEFAULT_IDLE_AFTER_MIN as u64 * 60_000,
             preview_until: 0,
             notice: None,
         }
+    }
+
+    /// How long nothing has to play before the idle screen shows.
+    pub fn set_idle_after_ms(&mut self, idle_after_ms: u64) {
+        self.idle_after_ms = idle_after_ms;
     }
 
     pub fn idle_mode(&self) -> IdleMode {
@@ -345,8 +346,10 @@ mod tests {
     const ART: Screen = Screen::Art { dimmed: false };
     const DIM: Screen = Screen::Art { dimmed: true };
 
+    /// Online, with a 1-minute idle time to keep the numbers short.
     fn online(mode: IdleMode) -> App {
         let mut app = App::new(mode);
+        app.set_idle_after_ms(60_000);
         app.handle(Event::Net(NetStatus::Online), 0);
         app
     }

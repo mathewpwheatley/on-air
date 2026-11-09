@@ -53,15 +53,6 @@ where
     Ok(())
 }
 
-/// Every idle mode in Mode-button order, for the position dots.
-const MODES: [IdleMode; 5] = [
-    IdleMode::AnalogClock,
-    IdleMode::DigitalClock,
-    IdleMode::Weather,
-    IdleMode::ClockWeather,
-    IdleMode::Off,
-];
-
 /// Full screen: "IDLE MODE", the mode's name and a row of dots showing
 /// where it sits in the cycle.
 fn mode_label<D>(mode: IdleMode, target: &mut D) -> Result<(), D::Error>
@@ -84,6 +75,7 @@ where
         IdleMode::AnalogClock => ("ANALOG", Some("CLOCK")),
         IdleMode::Weather => ("WEATHER", None),
         IdleMode::ClockWeather => ("CLOCK &", Some("WEATHER")),
+        IdleMode::LastSong => ("LAST", Some("SONG")),
         IdleMode::Off => ("NONE", None),
     };
     match second {
@@ -117,9 +109,10 @@ where
         }
     }
 
-    // Five 3×3 dots, 4 px apart, centered.
-    let left = (64 - (5 * 3 + 4 * 4)) / 2;
-    for (i, m) in MODES.iter().enumerate() {
+    // One 3×3 dot per mode, 4 px apart, centered.
+    let count = IdleMode::CYCLE.len() as i32;
+    let left = (64 - (count * 3 + (count - 1) * 4)) / 2;
+    for (i, m) in IdleMode::CYCLE.iter().enumerate() {
         let color = if *m == mode { WHITE } else { DIM };
         let at = Point::new(left + i as i32 * 7, 52);
         target.fill_solid(&Rectangle::new(at, Size::new(3, 3)), color)?;

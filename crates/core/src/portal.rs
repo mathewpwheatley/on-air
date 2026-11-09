@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use crate::auth::{self, CallbackError, Pkce};
-use crate::settings::{Settings, WeatherLocation};
+use crate::settings::{IDLE_AFTER_MIN_RANGE, Settings, WeatherLocation};
 use crate::timezone;
 use crate::weather::{Place, Units};
 
@@ -181,6 +181,8 @@ pub struct DisplayForm {
     pub place: PlaceChoice,
     pub units: Units,
     pub clock_24h: bool,
+    /// Minutes before the idle screen shows. `None` leaves it as it is.
+    pub idle_after_min: Option<u8>,
 }
 
 impl DisplayForm {
@@ -194,12 +196,15 @@ impl DisplayForm {
         }
         settings.units = self.units;
         settings.clock_24h = self.clock_24h;
+        if let Some(minutes) = self.idle_after_min {
+            settings.idle_after_min = minutes;
+        }
     }
 }
 
 /// Read and check the display form. Fields: `place` (`keep`, or `set` with
 /// `city`, `lat`, `lon` and `timezone` from the search), `units` (`c` or
-/// `f`) and `clock` (`12` or `24`).
+/// `f`), `clock` (`12` or `24`) and `idle_minutes` (1–30).
 pub fn parse_display(body: &str) -> Result<DisplayForm, FieldErrors> {
     let fields = form_fields(body);
     let get = |k: &str| fields.get(k).map(String::as_str).unwrap_or("");
@@ -251,11 +256,23 @@ pub fn parse_display(body: &str) -> Result<DisplayForm, FieldErrors> {
         }
     };
 
+    let idle_after_min = match get("idle_minutes") {
+        "" => None,
+        value => match value.parse::<u8>() {
+            Ok(m) if IDLE_AFTER_MIN_RANGE.contains(&m) => Some(m),
+            _ => {
+                errors.insert("idle_minutes", "Pick between 1 and 30 minutes.");
+                None
+            }
+        },
+    };
+
     if errors.is_empty() {
         Ok(DisplayForm {
             place,
             units,
             clock_24h,
+            idle_after_min,
         })
     } else {
         Err(errors)
@@ -284,6 +301,7 @@ pub struct Status {
     pub city: String,
     pub units: &'static str,
     pub clock: &'static str,
+    pub idle_minutes: u8,
 }
 
 impl Status {
@@ -304,6 +322,7 @@ impl Status {
                 Units::Fahrenheit => "f",
             },
             clock: if settings.clock_24h { "24" } else { "12" },
+            idle_minutes: settings.idle_after_min,
         }
     }
 
@@ -511,7 +530,7 @@ mod tests {
     #[test]
     fn display_form_with_city() {
         let form = parse_display(
-            "place=set&city=Portland&lat=45.52&lon=-122.68&timezone=America%2FLos_Angeles&units=f&clock=24",
+            "place=set&city=Portland&lat=45.52&lon=-122.68&timezone=America%2FLos_Angeles&units=f&clock=24&idle_minutes=12",
         )
         .unwrap();
         let mut settings = Settings::default();
@@ -520,6 +539,7 @@ mod tests {
         assert_eq!(settings.timezone, "America/Los_Angeles");
         assert_eq!(settings.units, Units::Fahrenheit);
         assert!(settings.clock_24h);
+        assert_eq!(settings.idle_after_min, 12);
     }
 
     #[test]
@@ -544,13 +564,21 @@ mod tests {
     #[test]
     fn display_form_errors() {
         let errors =
-            parse_display("place=set&city=Portland&lat=91&lon=0&timezone=Nowhere&units=k&clock=13")
+            parse_display("place=set&city=Portland&lat=91&lon=0&timezone=Nowhere&units=k&clock=13&idle_minutes=31")
                 .unwrap_err();
-        assert_eq!(errors.len(), 3);
+        assert_eq!(errors.len(), 4);
         assert!(
             errors.contains_key("place")
                 && errors.contains_key("units")
                 && errors.contains_key("clock")
+                && errors.contains_key("idle_minutes")
+        );
+        // Leaving the idle time out keeps the saved one.
+        assert_eq!(
+            parse_display("place=keep&units=c&clock=12")
+                .unwrap()
+                .idle_after_min,
+            None
         );
     }
 
