@@ -72,7 +72,7 @@ on-air/
 Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb888>)`.
 
 - Album art (from a decoded framebuffer), with paused dimming
-- Digital clock, analog clock, weather, clock + weather, off
+- Digital clock, analog clock, weather, clock + weather, weather + tides, last song, off
 - Status screens: setup QR + scrolling network name, Connecting…, Spotify sign-in needed, No WiFi, Premium needed
 - Overlays: button feedback icons (500 ms), "stale" weather marker
 - Small icon set (weather conditions, play/pause/next/previous, WiFi), drawn as image files and loaded with `tinyqoi` or `tinybmp`. Clock digits come from `u8g2-fonts`, which has many pixel fonts.
@@ -246,10 +246,11 @@ Each phase lists its tasks and when it counts as done.
 ### P8 — Idle screens on device (M5)
 
 - Hook the `on-air-ui` idle screens to SNTP time and `weather_task`.
+- Fetch tide times in `weather_task` while the Weather + tides screen is selected (`core::tide`), and redo the city's tide check while it's still unknown, saving the answer.
 - Save the selected idle screen.
 - Mode-tap preview while music is playing.
 
-**Done when:** all five idle screens work on the panel, weather refreshes on schedule, and nothing is fetched when no weather screen is selected.
+**Done when:** all the idle screens work on the panel, weather and tides refresh on schedule, a city's tide check is saved, and nothing is fetched when no weather screen is selected.
 
 ### P9 — Polish (M6)
 

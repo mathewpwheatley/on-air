@@ -20,6 +20,7 @@ pub mod settings;
 pub mod setup;
 pub mod spotify;
 pub mod spotify_sync;
+pub mod tide;
 pub mod timezone;
 pub mod weather;
 

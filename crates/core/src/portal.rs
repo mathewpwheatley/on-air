@@ -21,7 +21,7 @@
 //! | `POST /api/wifi` (form) | [`parse_wifi`], then join the network |
 //! | `POST /api/spotify/start` (form) | [`SignIn::new`], reply `{"ok":true,"authorize_url":…}` |
 //! | `POST /api/spotify/finish` (form) | [`SignIn::code_from`], exchange the code, save the refresh token |
-//! | `POST /api/display` (form) | [`parse_display`], save |
+//! | `POST /api/display` (form) | [`parse_display`], check a new city for tide data, save, reply [`display_saved_json`] |
 //! | `POST /api/done` | save everything and restart |
 
 use alloc::collections::BTreeMap;
@@ -32,6 +32,7 @@ use serde::Serialize;
 use crate::auth::{self, CallbackError, Pkce, TokenError};
 use crate::http::{self, Method, NetworkError, Outcome};
 use crate::settings::{IDLE_AFTER_MIN_RANGE, Settings, WeatherLocation};
+use crate::tide::{self, TideSupport};
 use crate::timezone;
 use crate::weather;
 use crate::weather::{Place, Units};
@@ -195,6 +196,10 @@ impl DisplayForm {
         match &self.place {
             PlaceChoice::Keep => {}
             PlaceChoice::Set(location, zone) => {
+                if settings.weather.as_ref() != Some(location) {
+                    // A new city needs its own tide check.
+                    settings.tides = TideSupport::Unknown;
+                }
                 settings.weather = Some(location.clone());
                 settings.timezone = zone.clone();
             }
@@ -307,6 +312,8 @@ pub struct Status {
     pub units: &'static str,
     pub clock: &'static str,
     pub idle_minutes: u8,
+    /// Whether the city has tide data: `yes`, `no` or `unknown`.
+    pub tides: &'static str,
 }
 
 impl Status {
@@ -328,6 +335,7 @@ impl Status {
             },
             clock: if settings.clock_24h { "24" } else { "12" },
             idle_minutes: settings.idle_after_min,
+            tides: tides_name(settings.tides),
         }
     }
 
@@ -414,6 +422,29 @@ pub fn missing_before_done(settings: &Settings) -> Option<&'static str> {
 /// `{"ok":true}`.
 pub fn ok_json() -> String {
     String::from(r#"{"ok":true}"#)
+}
+
+fn tides_name(tides: TideSupport) -> &'static str {
+    match tides {
+        TideSupport::Available => "yes",
+        TideSupport::Unavailable => "no",
+        TideSupport::Unknown => "unknown",
+    }
+}
+
+/// `{"ok":true,"tides":…}`, the reply to saving the display settings, so
+/// the page can say whether the tide screen is on offer.
+pub fn display_saved_json(tides: TideSupport) -> String {
+    #[derive(Serialize)]
+    struct Reply {
+        ok: bool,
+        tides: &'static str,
+    }
+    serde_json::to_string(&Reply {
+        ok: true,
+        tides: tides_name(tides),
+    })
+    .unwrap_or_default()
 }
 
 /// `{"ok":false,"errors":{field: message}}`, for a form with bad fields.
@@ -514,6 +545,8 @@ pub enum Event {
 enum Pending {
     Places,
     TokenExchange(SignIn),
+    /// Display settings with a new city, waiting on its tide check.
+    Display(DisplayForm),
 }
 
 /// The setup portal's state: settings being edited, WiFi progress and any
@@ -629,11 +662,23 @@ impl Portal {
                 }
             }
             (Method::Post, "/api/display") => match parse_display(body) {
-                Ok(form) => {
-                    form.apply(&mut self.settings);
-                    events(Event::SettingsChanged);
-                    json(ok_json())
-                }
+                Ok(form) => match &form.place {
+                    // Check a new city for tide data before saving, so the
+                    // page can say whether the tide screen is on offer.
+                    PlaceChoice::Set(location, _)
+                        if self.settings.weather.as_ref() != Some(location)
+                            || self.settings.tides == TideSupport::Unknown =>
+                    {
+                        let url = tide::tide_url(location.lat, location.lon);
+                        self.pending = Some(Pending::Display(form));
+                        Handled::Fetch(http::Request::get(url))
+                    }
+                    _ => {
+                        form.apply(&mut self.settings);
+                        events(Event::SettingsChanged);
+                        json(display_saved_json(self.settings.tides))
+                    }
+                },
                 Err(errors) => json(errors_json(&errors)),
             },
             (Method::Post, "/api/done") => {
@@ -663,6 +708,16 @@ impl Portal {
                 _ => message_json("Couldn't search for cities right now. Try again."),
             },
             Some(Pending::TokenExchange(sign_in)) => self.finish_sign_in(sign_in, outcome, events),
+            Some(Pending::Display(form)) => {
+                form.apply(&mut self.settings);
+                // A failed check stays unknown and is tried again later.
+                self.settings.tides = match outcome {
+                    Ok(r) if r.status == 200 => tide::support_from(&r.body),
+                    _ => TideSupport::Unknown,
+                };
+                events(Event::SettingsChanged);
+                display_saved_json(self.settings.tides)
+            }
             None => message_json("Something went wrong. Try again."),
         };
         Reply::Json(reply)
@@ -840,13 +895,17 @@ mod tests {
         assert!(places.contains("Portland, Oregon"));
 
         let display = "place=set&city=Portland&lat=45.52&lon=-122.68&timezone=America%2FLos_Angeles&units=f&clock=12&idle_minutes=5";
-        request(
-            &mut portal,
-            Method::Post,
-            "/api/display",
-            display,
-            None,
-            &mut events,
+        let inland = include_bytes!("../tests/fixtures/openmeteo_marine_denver.json");
+        assert_eq!(
+            request(
+                &mut portal,
+                Method::Post,
+                "/api/display",
+                display,
+                Some(Ok(Response::new(200, &inland[..]))),
+                &mut events,
+            ),
+            Reply::Json(display_saved_json(TideSupport::Unavailable))
         );
         assert_eq!(
             request(
@@ -1033,6 +1092,68 @@ mod tests {
             .unwrap_err();
         assert!(callback_message(&wrong).contains("older sign-in"));
         assert!(SignIn::new("nope", &[0; 32], &[0; 16]).is_err());
+    }
+
+    #[test]
+    fn saving_a_new_city_checks_for_tides() {
+        let coast = include_bytes!("../tests/fixtures/openmeteo_marine_san_francisco.json");
+        let san_francisco = "place=set&city=San+Francisco&lat=37.77&lon=-122.42&timezone=America%2FLos_Angeles&units=f&clock=12&idle_minutes=5";
+        let mut portal = Portal::new(Settings::default(), "OnAir-Setup-1A2B");
+        let mut events = Vec::new();
+
+        // The check fails: saved anyway, with tides unknown.
+        match portal.handle(
+            Method::Post,
+            "/api/display",
+            san_francisco,
+            &mut random,
+            &mut |e| events.push(e),
+        ) {
+            Handled::Fetch(request) => assert!(request.url.starts_with(tide::MARINE_URL)),
+            other => panic!("{other:?}"),
+        }
+        let reply = portal.finish(Err(NetworkError), &mut |e| events.push(e));
+        assert_eq!(reply, Reply::Json(display_saved_json(TideSupport::Unknown)));
+        assert_eq!(
+            portal.settings().weather.as_ref().unwrap().city,
+            "San Francisco"
+        );
+        assert_eq!(events, [Event::SettingsChanged]);
+
+        // Saving the same city again retries the check.
+        let reply = request(
+            &mut portal,
+            Method::Post,
+            "/api/display",
+            san_francisco,
+            Some(Ok(Response::new(200, &coast[..]))),
+            &mut events,
+        );
+        assert_eq!(
+            reply,
+            Reply::Json(display_saved_json(TideSupport::Available))
+        );
+        assert!(portal.settings().has_tides());
+        assert!(
+            Status::new(portal.settings(), "x", WifiState::Connected)
+                .to_json()
+                .contains(r#""tides":"yes""#)
+        );
+
+        // Changing only the units doesn't check again.
+        let reply = request(
+            &mut portal,
+            Method::Post,
+            "/api/display",
+            "place=keep&units=c&clock=12&idle_minutes=5",
+            None,
+            &mut events,
+        );
+        assert_eq!(
+            reply,
+            Reply::Json(display_saved_json(TideSupport::Available))
+        );
+        assert_eq!(portal.settings().units, Units::Celsius);
     }
 
     #[test]

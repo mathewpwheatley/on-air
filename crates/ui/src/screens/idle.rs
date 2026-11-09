@@ -1,5 +1,5 @@
-//! Idle screens: analog clock, digital clock, weather, clock + weather, last
-//! song, none.
+//! Idle screens: analog clock, digital clock, weather, clock + weather,
+//! weather + tides, last song, none.
 
 use embedded_graphics::{
     pixelcolor::Rgb888,
@@ -16,7 +16,7 @@ use crate::screens::art;
 use crate::text::{
     self, Align, DIM, GREY, LARGE, MEDIUM, MEDIUM_LARGE, SMALL, ShortText, TINY, WHITE,
 };
-use crate::{Scene, WeatherInfo};
+use crate::{Scene, TideTimes, WeatherInfo};
 
 const WEEKDAYS: [&str; 7] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 const MONTHS: [&str; 12] = [
@@ -33,6 +33,9 @@ where
         IdleMode::AnalogClock => analog_clock(scene.time, target),
         IdleMode::Weather => weather(scene.weather, target),
         IdleMode::ClockWeather => clock_weather(scene.time, scene.clock_24h, scene.weather, target),
+        IdleMode::WeatherTides => {
+            weather_tides(scene.weather, scene.tides, scene.clock_24h, target)
+        }
         // Dimmed like a paused cover, since nothing is playing.
         // Blank until something has played since power-up.
         IdleMode::LastSong => match scene.art {
@@ -356,12 +359,21 @@ where
 {
     time_with_suffix(&[&MEDIUM], time, clock_24h, Point::new(32, 16), target)?;
     date(time, 31, target)?;
+    weather_row(weather, 42, target)
+}
 
+/// The weather icon and temperature, centered together as one group, with
+/// the icon's top edge at `top`.
+fn weather_row<D>(weather: Option<WeatherInfo>, top: i32, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    let middle = top + 8;
     let Some(info) = weather else {
         text::draw(
             &SMALL,
             "NO WEATHER",
-            Point::new(32, 50),
+            Point::new(32, middle),
             Align::Center,
             GREY,
             target,
@@ -380,20 +392,75 @@ where
     let icon_width = icon.size().width as i32;
     let group_width = icon_width + GAP + temperature_width(&MEDIUM, r.temp, info.units, 3);
     let left = 32 - group_width / 2;
-    icons::draw_tinted(icon, Point::new(left, 42), 1, tint, target)?;
+    icons::draw_tinted(icon, Point::new(left, top), 1, tint, target)?;
     temperature(
         &MEDIUM,
         r.temp,
         info.units,
         3,
         left + icon_width + GAP,
-        50,
+        middle,
         Align::Left,
         color,
         target,
     )?;
     if info.stale {
-        icons::draw(Icon::Stale, Point::new(1, 37), 1, target)?;
+        icons::draw(Icon::Stale, Point::new(1, (top - 5).max(0)), 1, target)?;
     }
     Ok(())
+}
+
+/// Weather on top, then the next high and low tide, each after a wave icon
+/// with an up or down arrow.
+fn weather_tides<D>(
+    weather: Option<WeatherInfo>,
+    tides: Option<TideTimes>,
+    clock_24h: bool,
+    target: &mut D,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    weather_row(weather, 8, target)?;
+
+    const GAP: i32 = 4;
+    let rows = [
+        (Icon::TideHigh, tides.and_then(|t| t.high), 40),
+        (Icon::TideLow, tides.and_then(|t| t.low), 52),
+    ];
+    let label = |time: Option<DateTime>| match time {
+        Some(time) => tide_time(&time, clock_24h),
+        None => ShortText::format(format_args!("--:--")),
+    };
+    // Line both rows up on the left, centered on the wider of the two.
+    let icon_width = Icon::TideHigh.size().width as i32;
+    let widest = rows
+        .iter()
+        .map(|&(_, time, _)| text::width(&SMALL, label(time).as_str()) as i32)
+        .max()
+        .unwrap_or(0);
+    let left = 32 - (icon_width + GAP + widest) / 2;
+    for (icon, time, middle) in rows {
+        let height = icon.size().height as i32;
+        icons::draw(icon, Point::new(left, middle - height / 2), 1, target)?;
+        let color = if time.is_some() { WHITE } else { GREY };
+        text::draw(
+            &SMALL,
+            label(time).as_str(),
+            Point::new(left + icon_width + GAP, middle),
+            Align::Left,
+            color,
+            target,
+        )?;
+    }
+    Ok(())
+}
+
+/// A tide time like `4:12 PM`, or `16:12` on a 24-hour clock.
+fn tide_time(time: &DateTime, clock_24h: bool) -> ShortText {
+    let (hour, suffix) = hour_and_suffix(time, clock_24h);
+    match suffix {
+        Some(suffix) => ShortText::format(format_args!("{hour}:{:02} {suffix}", time.minute())),
+        None => ShortText::format(format_args!("{hour:02}:{:02}", time.minute())),
+    }
 }

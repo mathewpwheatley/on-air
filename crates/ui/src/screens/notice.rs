@@ -8,12 +8,14 @@ use on_air_core::settings::IdleMode;
 use crate::icons::{self, Icon};
 use crate::text::{self, Align, DIM, SMALL, WHITE};
 
-pub fn draw<D>(notice: Notice, target: &mut D) -> Result<(), D::Error>
+/// `tides` is whether the tide screen is in the Mode cycle, for the
+/// position dots.
+pub fn draw<D>(notice: Notice, tides: bool, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
     match notice {
-        Notice::Mode(mode) => return mode_label(mode, target),
+        Notice::Mode(mode) => return mode_label(mode, tides, target),
         // Drawn by `track_info`, which needs the scene.
         Notice::TrackInfo => return Ok(()),
         _ => {}
@@ -55,7 +57,7 @@ where
 
 /// Full screen: "IDLE MODE", the mode's name and a row of dots showing
 /// where it sits in the cycle.
-fn mode_label<D>(mode: IdleMode, target: &mut D) -> Result<(), D::Error>
+fn mode_label<D>(mode: IdleMode, tides: bool, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
@@ -75,6 +77,7 @@ where
         IdleMode::AnalogClock => ("ANALOG", Some("CLOCK")),
         IdleMode::Weather => ("WEATHER", None),
         IdleMode::ClockWeather => ("CLOCK &", Some("WEATHER")),
+        IdleMode::WeatherTides => ("WEATHER", Some("& TIDES")),
         IdleMode::LastSong => ("LAST", Some("SONG")),
         IdleMode::Off => ("NONE", None),
     };
@@ -110,9 +113,10 @@ where
     }
 
     // One 3×3 dot per mode, 4 px apart, centered.
-    let count = IdleMode::CYCLE.len() as i32;
+    let cycle = IdleMode::cycle(tides);
+    let count = cycle.len() as i32;
     let left = (64 - (count * 3 + (count - 1) * 4)) / 2;
-    for (i, m) in IdleMode::CYCLE.iter().enumerate() {
+    for (i, m) in cycle.iter().enumerate() {
         let color = if *m == mode { WHITE } else { DIM };
         let at = Point::new(left + i as i32 * 7, 52);
         target.fill_solid(&Rectangle::new(at, Size::new(3, 3)), color)?;

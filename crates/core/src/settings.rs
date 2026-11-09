@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+use crate::tide::TideSupport;
 use crate::weather::Units;
 
 pub const SCHEMA_VERSION: u8 = 1;
@@ -28,12 +29,23 @@ pub enum IdleMode {
     Off,
     /// The most recent cover, kept on screen.
     LastSong,
+    /// Weather with the next high and low tide. Only offered where the city
+    /// has tide data.
+    WeatherTides,
 }
 
 impl IdleMode {
-    /// The screen after this one when Mode is tapped.
     /// Every idle screen, in Mode-button order.
-    pub const CYCLE: [IdleMode; 6] = [
+    const CYCLE: [IdleMode; 7] = [
+        IdleMode::AnalogClock,
+        IdleMode::DigitalClock,
+        IdleMode::Weather,
+        IdleMode::ClockWeather,
+        IdleMode::WeatherTides,
+        IdleMode::LastSong,
+        IdleMode::Off,
+    ];
+    const CYCLE_WITHOUT_TIDES: [IdleMode; 6] = [
         IdleMode::AnalogClock,
         IdleMode::DigitalClock,
         IdleMode::Weather,
@@ -42,15 +54,46 @@ impl IdleMode {
         IdleMode::Off,
     ];
 
-    pub fn next(self) -> Self {
-        let i = Self::CYCLE.iter().position(|&m| m == self).unwrap_or(0);
-        Self::CYCLE[(i + 1) % Self::CYCLE.len()]
+    /// The idle screens on offer, in Mode-button order. The tide screen is
+    /// left out where there's no tide data.
+    pub fn cycle(tides: bool) -> &'static [IdleMode] {
+        if tides {
+            &Self::CYCLE
+        } else {
+            &Self::CYCLE_WITHOUT_TIDES
+        }
+    }
+
+    /// The screen to show for this choice: plain weather in place of the
+    /// tide screen when there's no tide data.
+    pub fn shown(self, tides: bool) -> Self {
+        if self == IdleMode::WeatherTides && !tides {
+            IdleMode::Weather
+        } else {
+            self
+        }
+    }
+
+    /// The screen after this one when Mode is tapped.
+    pub fn next(self, tides: bool) -> Self {
+        let cycle = Self::cycle(tides);
+        let current = self.shown(tides);
+        let i = cycle.iter().position(|&m| m == current).unwrap_or(0);
+        cycle[(i + 1) % cycle.len()]
     }
 
     /// Whether this screen needs weather data, so fetching can stop
     /// otherwise.
     pub fn shows_weather(self) -> bool {
-        matches!(self, IdleMode::Weather | IdleMode::ClockWeather)
+        matches!(
+            self,
+            IdleMode::Weather | IdleMode::ClockWeather | IdleMode::WeatherTides
+        )
+    }
+
+    /// Whether this screen needs tide times.
+    pub fn shows_tides(self) -> bool {
+        self == IdleMode::WeatherTides
     }
 }
 
@@ -77,6 +120,8 @@ pub struct Settings {
     pub units: Units,
     /// Minutes with nothing playing before the idle screen shows.
     pub idle_after_min: u8,
+    /// Whether the weather city has tide data, checked when it's saved.
+    pub tides: TideSupport,
 }
 
 impl Default for Settings {
@@ -92,6 +137,7 @@ impl Default for Settings {
             weather: None,
             units: Units::default(),
             idle_after_min: DEFAULT_IDLE_AFTER_MIN,
+            tides: TideSupport::Unknown,
         }
     }
 }
@@ -128,6 +174,11 @@ impl Settings {
         self.idle_after_min.clamp(*range.start(), *range.end()) as u64 * 60_000
     }
 
+    /// Whether to offer the tide screen.
+    pub fn has_tides(&self) -> bool {
+        self.weather.is_some() && self.tides == TideSupport::Available
+    }
+
     /// Whether there's enough to join WiFi.
     pub fn has_wifi(&self) -> bool {
         !self.wifi_ssid.is_empty()
@@ -161,6 +212,7 @@ mod tests {
             }),
             units: Units::Fahrenheit,
             idle_after_min: 12,
+            tides: TideSupport::Available,
         }
     }
 
@@ -206,17 +258,34 @@ mod tests {
         assert!(s.has_wifi() && !s.is_complete());
     }
 
-    #[test]
-    fn idle_mode_cycles_through_all_six() {
-        let mut m = IdleMode::AnalogClock;
+    fn cycle_from(start: IdleMode, tides: bool) -> Vec<IdleMode> {
+        let mut m = start;
         let mut seen = Vec::new();
-        for _ in 0..6 {
+        loop {
             seen.push(m);
-            m = m.next();
+            m = m.next(tides);
+            if m == start {
+                return seen;
+            }
         }
-        assert_eq!(m, IdleMode::AnalogClock);
+    }
+
+    #[test]
+    fn idle_mode_cycle_includes_tides_only_when_available() {
         assert_eq!(
-            seen,
+            cycle_from(IdleMode::AnalogClock, true),
+            [
+                IdleMode::AnalogClock,
+                IdleMode::DigitalClock,
+                IdleMode::Weather,
+                IdleMode::ClockWeather,
+                IdleMode::WeatherTides,
+                IdleMode::LastSong,
+                IdleMode::Off
+            ]
+        );
+        assert_eq!(
+            cycle_from(IdleMode::AnalogClock, false),
             [
                 IdleMode::AnalogClock,
                 IdleMode::DigitalClock,
@@ -226,7 +295,46 @@ mod tests {
                 IdleMode::Off
             ]
         );
-        assert!(IdleMode::Weather.shows_weather() && IdleMode::ClockWeather.shows_weather());
+        assert_eq!(
+            IdleMode::cycle(true),
+            cycle_from(IdleMode::AnalogClock, true)
+        );
+        assert_eq!(
+            IdleMode::cycle(false),
+            cycle_from(IdleMode::AnalogClock, false)
+        );
+    }
+
+    #[test]
+    fn tide_screen_falls_back_to_weather_without_tides() {
+        assert_eq!(IdleMode::WeatherTides.shown(true), IdleMode::WeatherTides);
+        assert_eq!(IdleMode::WeatherTides.shown(false), IdleMode::Weather);
+        // Mode from the fallback carries on as if from weather.
+        assert_eq!(IdleMode::WeatherTides.next(false), IdleMode::ClockWeather);
+        assert_eq!(IdleMode::DigitalClock.shown(false), IdleMode::DigitalClock);
+    }
+
+    #[test]
+    fn weather_and_tide_screens() {
+        for m in [
+            IdleMode::Weather,
+            IdleMode::ClockWeather,
+            IdleMode::WeatherTides,
+        ] {
+            assert!(m.shows_weather(), "{m:?}");
+        }
         assert!(!IdleMode::DigitalClock.shows_weather() && !IdleMode::Off.shows_weather());
+        assert!(IdleMode::WeatherTides.shows_tides() && !IdleMode::Weather.shows_tides());
+    }
+
+    #[test]
+    fn tides_need_a_city_with_tide_data() {
+        assert!(sample().has_tides());
+        let mut s = sample();
+        s.tides = TideSupport::Unknown;
+        assert!(!s.has_tides());
+        let mut s = sample();
+        s.weather = None;
+        assert!(!s.has_tides());
     }
 }

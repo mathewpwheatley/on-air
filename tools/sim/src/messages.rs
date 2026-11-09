@@ -3,6 +3,7 @@
 use on_air_core::app::{CommandFailure, NetStatus};
 use on_air_core::settings::Settings;
 use on_air_core::spotify::{Command, NowPlaying};
+use on_air_core::tide::{TideSupport, TideTurn};
 use on_air_core::weather::Reading;
 
 /// From a source to the window.
@@ -17,6 +18,10 @@ pub enum Update {
     SignedIn,
     CommandFailed(CommandFailure),
     Weather(Reading),
+    /// Whether the weather city has tide data.
+    TideSupport(TideSupport),
+    /// Upcoming highs and lows, in time order.
+    Tides(Vec<TideTurn>),
     /// IANA timezone of the weather city, used when `--timezone` isn't given.
     Timezone(String),
     /// The setup portal saved new clock and weather settings.

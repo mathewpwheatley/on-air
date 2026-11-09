@@ -6,6 +6,7 @@ mod http_client;
 mod live;
 mod messages;
 mod portal;
+mod tides;
 mod weather;
 
 use std::path::PathBuf;
@@ -23,9 +24,10 @@ use on_air_core::app::{Action, App, Event, NetStatus, Playback};
 use on_air_core::input::{ADC_MAX, Buttons, DEFAULT_FLOOR, InputEvent, Knob, POLL_INTERVAL_MS};
 use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, IdleMode, Settings, WeatherLocation};
 use on_air_core::spotify::NowPlaying;
+use on_air_core::tide::{self, TideSupport, TideTurn};
 use on_air_core::timezone::{self, TimeZone};
 use on_air_core::weather::{Reading, STALE_AFTER_S, Units};
-use on_air_ui::{Framebuffer, HEIGHT, Scene, Track, WIDTH, WeatherInfo};
+use on_air_ui::{Framebuffer, HEIGHT, Scene, TideTimes, Track, WIDTH, WeatherInfo};
 
 use messages::{Control, Update};
 
@@ -185,7 +187,10 @@ fn main() {
             let tx = update_tx.clone();
             std::thread::spawn(move || weather::run(city, units, tx, weather_generation));
         }
-        None => weather::fake(update_tx.clone()),
+        None => {
+            weather::fake(update_tx.clone());
+            tides::fake(update_tx.clone());
+        }
     }
     // Kept for the setup portal, which starts later.
     let portal_updates = update_tx;
@@ -241,6 +246,7 @@ fn main() {
     }
     let mut art: Option<Vec<u8>> = None;
     let mut weather: Option<(Reading, Instant)> = None;
+    let mut tide_turns: Vec<TideTurn> = Vec::new();
     let mut no_wifi = false;
     let mut sign_in_needed = false;
 
@@ -388,6 +394,10 @@ fn main() {
                     app.handle(Event::CommandFailed(failure), now);
                 }
                 Update::Weather(reading) => weather = Some((reading, Instant::now())),
+                Update::TideSupport(support) => {
+                    app.set_tides_available(support == TideSupport::Available);
+                }
+                Update::Tides(turns) => tide_turns = turns,
                 Update::DisplaySaved(settings) => {
                     clock_24h = settings.clock_24h;
                     app.set_idle_after_ms(settings.idle_after_ms());
@@ -395,13 +405,24 @@ fn main() {
                     if let Some(found) = timezone::find(&settings.timezone) {
                         zone = found;
                     }
+                    app.set_tides_available(settings.has_tides());
                     // Restart the weather only if the city or units changed.
                     if settings.weather != weather_location || settings.units != units {
                         units = settings.units;
                         weather_location = settings.weather.clone();
                         let generation = weather::Generation::next(&weather_counter);
                         weather = None;
+                        tide_turns.clear();
                         if let Some(place) = settings.weather {
+                            // The portal already checked; only fetch where
+                            // there's tide data or the check didn't finish.
+                            if settings.tides != TideSupport::Unavailable {
+                                let (tx, tide_generation) =
+                                    (portal_updates.clone(), generation.clone());
+                                std::thread::spawn(move || {
+                                    tides::run_at(place.lat, place.lon, tx, tide_generation)
+                                });
+                            }
                             let tx = portal_updates.clone();
                             std::thread::spawn(move || {
                                 weather::run_at(place.lat, place.lon, units, tx, generation)
@@ -438,6 +459,15 @@ fn main() {
                 reading,
                 stale: at.elapsed().as_secs() > STALE_AFTER_S,
                 units,
+            }),
+            tides_available: app.tides_available(),
+            tides: (!tide_turns.is_empty()).then(|| {
+                let next = tide::next_tides(&tide_turns, unix_s);
+                let local = |at: Option<i64>| at.and_then(|s| timezone::local_time(&zone, s));
+                TideTimes {
+                    high: local(next.high),
+                    low: local(next.low),
+                }
             }),
             track: track.as_ref().map(|t| Track {
                 title: &t.title,

@@ -21,6 +21,10 @@ pub enum Icon {
     NoWifi,
     Music,
     Stale,
+    /// Waves with an up arrow.
+    TideHigh,
+    /// Waves with a down arrow.
+    TideLow,
 }
 
 impl From<weather::Icon> for Icon {
@@ -53,6 +57,8 @@ impl Icon {
             Icon::NoWifi => include_bytes!("../assets/icons/no_wifi.bmp"),
             Icon::Music => include_bytes!("../assets/icons/music.bmp"),
             Icon::Stale => include_bytes!("../assets/icons/stale.bmp"),
+            Icon::TideHigh => include_bytes!("../assets/icons/tide_high.bmp"),
+            Icon::TideLow => include_bytes!("../assets/icons/tide_low.bmp"),
         }
     }
 
@@ -151,6 +157,8 @@ mod tests {
             Icon::NoWifi,
             Icon::Music,
             Icon::Stale,
+            Icon::TideHigh,
+            Icon::TideLow,
         ] {
             assert!(icon.size().width > 0, "{icon:?}");
         }

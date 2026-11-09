@@ -45,12 +45,13 @@ On-Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 | D-3 | Fetch and decode the 64×64 JPEG that Spotify provides for each album, so no resizing is needed. If no 64 px image exists, downscale the smallest available. |
 | D-4 | Crossfade between covers over about 300 ms. |
 | D-5 | When playback is paused, dim the art to about 40% of the current brightness. |
-| D-6 | Idle screens, cycled with the mode button: **Analog clock**, **Digital clock**, **Weather**, **Clock + weather**, **Last song** (the most recent cover stays on screen, dimmed like a paused cover; the digital clock until something has played since power-up), or **None** (panel dark). Each Mode tap first shows "IDLE MODE", the mode's name and a row of position dots for about 1.5 s. Enter the idle screen after nothing has played for the owner's idle time (set in the portal, 1–30 min, default 5 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
+| D-6 | Idle screens, cycled with the mode button: **Analog clock**, **Digital clock**, **Weather**, **Clock + weather**, **Weather + tides** (only where the city has tide data, see W-6), **Last song** (the most recent cover stays on screen, dimmed like a paused cover; blank until something has played since power-up), or **None** (panel dark). Each Mode tap first shows "IDLE MODE", the mode's name and a row of position dots for about 2 s. Enter the idle screen after nothing has played for the owner's idle time (set in the portal, 1–30 min, default 5 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
 | D-7 | Status screens: setup instructions plus a WiFi-join QR code, "Connecting…", "Spotify sign-in needed", and a "No WiFi" error icon. |
 | D-8 | Brightness from the knob scales the whole framebuffer. Firmware caps the total estimated current below the power supply's rating (see §5.2). |
 | D-9 | **Clock:** time comes from SNTP in the configured timezone. Digital shows HH:MM (12 h or 24 h, configurable) with the date underneath. Analog shows a round face with hour and minute hands, updated every minute. Before the first SNTP sync, show "--:--" instead of a wrong time. |
 | D-10 | **Weather:** a condition icon (sun, cloud, rain, snow, storm, fog), the current temperature, and today's high and low. Units are °C or °F (configurable). |
-| D-11 | **Clock + weather:** a digital clock on the top half and a weather icon plus current temperature on the bottom half. |
+| D-11 | **Clock + weather:** a digital clock on top, the date under it, and a weather icon plus current temperature at the bottom. |
+| D-14 | **Weather + tides:** a weather icon plus current temperature on top, then the next high and low tide times, each after a small wave icon with an up or down arrow. Shows "--:--" until tide times arrive. |
 | D-12 | If weather data is unavailable or older than 2 h, the weather screens show the last known data with a small "stale" marker, or a "No weather" icon if there is none. The clock keeps working. |
 | D-13 | **Track info:** title, artist and album (or show, for podcasts) over the cover dimmed to about 20%, for 5 s. Lines too wide for the panel scroll. Shown by holding Play/Pause for 2 s. |
 
@@ -72,12 +73,15 @@ stateDiagram-v2
         Analog: Analog clock
         Weather: Weather
         ClockWeather: Clock + weather
+        WeatherTides: Weather + tides (only with tide data)
         LastSong: Last song (most recent cover)
         Off: None (panel dark)
         Analog --> Digital: Mode tap
         Digital --> Weather: Mode tap
         Weather --> ClockWeather: Mode tap
-        ClockWeather --> LastSong: Mode tap
+        ClockWeather --> WeatherTides: Mode tap, with tide data
+        ClockWeather --> LastSong: Mode tap, without tide data
+        WeatherTides --> LastSong: Mode tap
         LastSong --> Off: Mode tap
         Off --> Analog: Mode tap
     }
@@ -104,6 +108,8 @@ stateDiagram-v2
 | W-3 | Map WMO `weather_code` values to the small set of icons in D-10. |
 | W-4 | Location is set in the portal as a city name. The device turns it into latitude and longitude once, using the Open-Meteo geocoding API, and stores the result. |
 | W-5 | On errors, retry with exponential backoff (max 15 min) and keep showing the last good data (see D-12). |
+| W-6 | When a new city is saved in the portal, check it for tide data once with the Open-Meteo marine API (`GET /v1/marine` with `hourly=sea_level_height_msl` and `cell_selection=sea`) and store the answer. Offer the Weather + tides screen only when tide data exists. Inland places, and some sheltered water such as Puget Sound, have none. The portal says under the city whether the tide screen is on offer. If the check can't reach Open-Meteo, the answer stays unknown, the tide screen stays hidden, and the device checks again later. |
+| W-7 | Find high and low tides as the peaks and dips of the hourly sea level height, placing each between the hours with a parabola fit. Fetch 3 days ahead, every 6 h, only while the Weather + tides screen is selected. |
 
 ### 3.4 Setup portal
 
@@ -144,11 +150,11 @@ sequenceDiagram
 | Button 1 | GPIO, internal pull-up | Play/Pause: tap to play or pause, hold 2 s to show track info |
 | Button 2 | GPIO | Previous |
 | Button 3 | GPIO | Next |
-| Button 4 | GPIO | Mode: tap to cycle the idle screen (analog clock → digital clock → weather → clock + weather → last song → none), hold 5 s for the portal |
+| Button 4 | GPIO | Mode: tap to cycle the idle screen (analog clock → digital clock → weather → clock + weather → weather + tides, where available → last song → none), hold 5 s for the portal |
 
 Buttons are debounced in software (20 ms) and give quick visual feedback on the panel (a small icon for about 500 ms).
 
-Tapping **Mode** while music is playing shows a preview of the next idle screen for about 2 s, then returns to the album art, so the owner can pick a screen without stopping the music.
+Tapping **Mode** while music is playing shows a preview of the next idle screen for about 4 s, then returns to the album art, so the owner can pick a screen without stopping the music.
 
 ## 4. Non-functional requirements
 
@@ -308,11 +314,12 @@ stateDiagram-v2
 | `spotify.client_id` | From the owner's Spotify developer app |
 | `spotify.refresh_token` | Rewritten whenever Spotify rotates it |
 | `ui.idle_after_min` | Minutes with nothing playing before the idle screen shows, 1–30 (default 5) |
-| `ui.idle_mode` | `clock_digital` / `clock_analog` / `weather` / `clock_weather` / `last_song` / `off` |
+| `ui.idle_mode` | `clock_digital` / `clock_analog` / `weather` / `clock_weather` / `weather_tides` / `last_song` / `off` |
 | `ui.timezone` | IANA timezone name for the clock, e.g. `America/Los_Angeles` |
 | `ui.clock_24h` | `true` / `false` |
 | `weather.city` | City name as typed in the portal |
 | `weather.lat` / `weather.lon` | Coordinates from geocoding |
+| `weather.tides` | Whether the city has tide data: `unknown` / `available` / `unavailable` |
 | `weather.units` | `c` / `f` |
 
 ## 7. Repository layout

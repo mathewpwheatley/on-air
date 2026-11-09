@@ -34,6 +34,11 @@ pub struct Scene<'a> {
     pub time: Option<DateTime>,
     pub clock_24h: bool,
     pub weather: Option<WeatherInfo>,
+    /// Whether the city has tide data, which adds the tide screen to the
+    /// Mode cycle.
+    pub tides_available: bool,
+    /// The next high and low tide, in local time.
+    pub tides: Option<TideTimes>,
     /// What's playing, for the track info screen.
     pub track: Option<Track<'a>>,
     /// Setup network name, shown on the setup screen.
@@ -56,6 +61,14 @@ pub struct WeatherInfo {
     pub stale: bool,
     /// The units the reading is in, shown after the temperature.
     pub units: Units,
+}
+
+/// The next high and low tide, in local time. Either is `None` when the
+/// forecast doesn't reach that far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TideTimes {
+    pub high: Option<DateTime>,
+    pub low: Option<DateTime>,
 }
 
 /// Draw a whole scene, replacing everything on the target.
@@ -86,7 +99,7 @@ where
     }
     match scene.view.notice {
         Some(Notice::TrackInfo) => screens::track_info::draw(scene, target)?,
-        Some(notice) => screens::notice::draw(notice, target)?,
+        Some(notice) => screens::notice::draw(notice, scene.tides_available, target)?,
         None => {}
     }
     Ok(())

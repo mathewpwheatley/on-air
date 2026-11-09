@@ -39,7 +39,7 @@ impl Generation {
         }
     }
 
-    fn is_current(&self) -> bool {
+    pub fn is_current(&self) -> bool {
         self.counter.load(Ordering::SeqCst) == self.mine
     }
 }
@@ -85,6 +85,8 @@ pub fn run(city: String, units: Units, updates: Sender<Update>, generation: Gene
     {
         let _ = updates.send(Update::Timezone(timezone));
     }
+    let (tx, tide_generation) = (updates.clone(), generation.clone());
+    std::thread::spawn(move || crate::tides::run_at(place.lat, place.lon, tx, tide_generation));
     run_at(place.lat, place.lon, units, updates, generation);
 }
 

@@ -10,7 +10,7 @@ use on_air_core::app::{Notice, Screen, View};
 use on_air_core::settings::IdleMode;
 use on_air_core::timezone;
 use on_air_core::weather::{Icon, Reading, Units};
-use on_air_ui::{Framebuffer, Scene, Track, WeatherInfo, draw};
+use on_air_ui::{Framebuffer, Scene, TideTimes, Track, WeatherInfo, draw};
 
 /// 2026-11-08 13:30:00 UTC, a Sunday.
 const UNIX_S: i64 = 1_794_144_600;
@@ -46,6 +46,8 @@ fn base<'a>(screen: Screen) -> Scene<'a> {
             stale: false,
             units: Units::Celsius,
         }),
+        tides_available: false,
+        tides: None,
         track: Some(Track {
             title: "Mr. Brightside",
             artist: "The Killers",
@@ -233,11 +235,59 @@ fn last_song_without_cover_is_black() {
 
 #[test]
 fn mode_labels() {
-    for mode in IdleMode::CYCLE {
+    for &mode in IdleMode::cycle(true) {
         let mut s = base(Screen::Idle(mode));
+        s.tides_available = true;
         s.view.notice = Some(Notice::Mode(mode));
         check(&format!("mode_{mode:?}").to_lowercase(), &s);
     }
+    // Without tide data there's one dot fewer.
+    let mut s = base(Screen::Idle(IdleMode::Weather));
+    s.view.notice = Some(Notice::Mode(IdleMode::Weather));
+    check("mode_weather_without_tides", &s);
+}
+
+#[test]
+fn weather_tides() {
+    let utc = timezone::find("UTC").unwrap();
+    // 4:12 PM and 10:38 PM on the snapshot day.
+    let tides = TideTimes {
+        high: timezone::local_time(&utc, UNIX_S + 2 * 3600 + 42 * 60),
+        low: timezone::local_time(&utc, UNIX_S + 9 * 3600 + 8 * 60),
+    };
+    let mut s = base(Screen::Idle(IdleMode::WeatherTides));
+    s.tides_available = true;
+    s.tides = Some(tides);
+    check("weather_tides", &s);
+    s.clock_24h = true;
+    check("weather_tides_24h", &s);
+
+    // Fetched but not back yet, and no weather either.
+    let mut s = base(Screen::Idle(IdleMode::WeatherTides));
+    s.tides_available = true;
+    s.weather = None;
+    check("weather_tides_waiting", &s);
+
+    // Hot, stale weather with the widest times.
+    let mut s = base(Screen::Idle(IdleMode::WeatherTides));
+    s.tides_available = true;
+    s.weather = Some(WeatherInfo {
+        reading: Reading {
+            temp: 104,
+            high: 110,
+            low: 80,
+            icon: Icon::Sun,
+            utc_offset_s: 0,
+        },
+        stale: true,
+        units: Units::Fahrenheit,
+    });
+    // 10:58 AM and 11:49 PM.
+    s.tides = Some(TideTimes {
+        high: timezone::local_time(&utc, UNIX_S - 2 * 3600 - 32 * 60),
+        low: timezone::local_time(&utc, UNIX_S + 10 * 3600 + 19 * 60),
+    });
+    check("weather_tides_widest", &s);
 }
 
 #[test]

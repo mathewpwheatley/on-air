@@ -15,10 +15,10 @@ pub const NOTICE_MS: u64 = 2_000;
 /// How long the song title, artist and album show.
 pub const TRACK_INFO_MS: u64 = 5_000;
 /// How long the mode name and position dots show after a Mode tap.
-pub const MODE_LABEL_MS: u64 = 1_500;
+pub const MODE_LABEL_MS: u64 = 2_000;
 /// How long a Mode tap previews the next idle screen over album art,
 /// after the mode name.
-pub const PREVIEW_MS: u64 = 2_000;
+pub const PREVIEW_MS: u64 = 4_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetStatus {
@@ -123,7 +123,10 @@ pub struct App {
     ever_online: bool,
     signed_in: bool,
     play: PlayState,
+    /// The owner's choice. See [`App::idle_mode`] for what shows.
     idle_mode: IdleMode,
+    /// Whether the weather city has tide data.
+    tides: bool,
     idle_after_ms: u64,
     preview_until: u64,
     /// The notice, when it started and when it ends.
@@ -139,6 +142,7 @@ impl App {
             signed_in: true,
             play: PlayState::Unknown,
             idle_mode,
+            tides: false,
             idle_after_ms: crate::settings::DEFAULT_IDLE_AFTER_MIN as u64 * 60_000,
             preview_until: 0,
             notice: None,
@@ -150,8 +154,19 @@ impl App {
         self.idle_after_ms = idle_after_ms;
     }
 
+    /// Whether to offer the tide screen. Without tides, a saved tide screen
+    /// shows plain weather instead.
+    pub fn set_tides_available(&mut self, tides: bool) {
+        self.tides = tides;
+    }
+
+    pub fn tides_available(&self) -> bool {
+        self.tides
+    }
+
+    /// The idle screen to show.
     pub fn idle_mode(&self) -> IdleMode {
-        self.idle_mode
+        self.idle_mode.shown(self.tides)
     }
 
     /// Whether Spotify reports music playing right now.
@@ -260,7 +275,7 @@ impl App {
                 Some(Action::Spotify(Command::Previous))
             }
             InputEvent::Tap(Button::Mode) => {
-                self.idle_mode = self.idle_mode.next();
+                self.idle_mode = self.idle_mode.next(self.tides);
                 self.show(Notice::Mode(self.idle_mode), now, MODE_LABEL_MS);
                 if matches!(self.base_screen(now), Screen::Art { .. }) {
                     self.preview_until = now + MODE_LABEL_MS + PREVIEW_MS;
@@ -303,7 +318,7 @@ impl App {
                 has_art: true,
                 since,
             } if now.saturating_sub(since) < self.idle_after_ms => Screen::Art { dimmed: true },
-            _ => Screen::Idle(self.idle_mode),
+            _ => Screen::Idle(self.idle_mode()),
         }
     }
 
@@ -311,7 +326,7 @@ impl App {
     pub fn view(&self, now: u64) -> View {
         let mut screen = self.base_screen(now);
         if matches!(screen, Screen::Art { .. }) && now < self.preview_until {
-            screen = Screen::Idle(self.idle_mode);
+            screen = Screen::Idle(self.idle_mode());
         }
         let notice = self.notice.filter(|&(_, _, until)| now < until);
         View {
@@ -453,7 +468,32 @@ mod tests {
             app.view(10).notice,
             Some(Notice::Mode(IdleMode::DigitalClock))
         );
-        assert_eq!(app.view(1_510).notice, None);
+        assert!(app.view(10 + MODE_LABEL_MS - 1).notice.is_some());
+        assert_eq!(app.view(10 + MODE_LABEL_MS).notice, None);
+    }
+
+    #[test]
+    fn tide_screen_only_offered_with_tides() {
+        let mut app = online(IdleMode::ClockWeather);
+        app.handle(Event::Playback(Playback::Nothing), 0);
+        assert_eq!(
+            app.handle(tap(Button::Mode), 10),
+            Some(Action::SaveIdleMode(IdleMode::LastSong))
+        );
+
+        let mut app = online(IdleMode::ClockWeather);
+        app.set_tides_available(true);
+        app.handle(Event::Playback(Playback::Nothing), 0);
+        assert_eq!(
+            app.handle(tap(Button::Mode), 10),
+            Some(Action::SaveIdleMode(IdleMode::WeatherTides))
+        );
+        assert_eq!(app.view(10).screen, Screen::Idle(IdleMode::WeatherTides));
+
+        // The city changed to one without tides: plain weather shows.
+        app.set_tides_available(false);
+        assert_eq!(app.view(20).screen, Screen::Idle(IdleMode::Weather));
+        assert_eq!(app.idle_mode(), IdleMode::Weather);
     }
 
     #[test]
@@ -480,8 +520,9 @@ mod tests {
             Some(Action::Spotify(Command::Next))
         );
         assert_eq!(app.view(10).notice, Some(Notice::Mode(IdleMode::Off)));
-        assert_eq!(app.view(1_510).notice, None);
-        assert_eq!(app.view(1_510).screen, Screen::Idle(IdleMode::Off));
+        let after = 10 + MODE_LABEL_MS;
+        assert_eq!(app.view(after).notice, None);
+        assert_eq!(app.view(after).screen, Screen::Idle(IdleMode::Off));
     }
 
     #[test]
@@ -493,11 +534,18 @@ mod tests {
             app.view(1_000).notice,
             Some(Notice::Mode(IdleMode::DigitalClock))
         );
-        assert_eq!(app.view(3_000).screen, Screen::Idle(IdleMode::DigitalClock));
+        // The name, then the screen itself, then back to the art.
+        let preview = 1_000 + MODE_LABEL_MS;
+        assert_eq!(app.view(preview).notice, None);
+        assert_eq!(
+            app.view(preview).screen,
+            Screen::Idle(IdleMode::DigitalClock)
+        );
         // Another tap during the preview moves on and restarts the timer.
-        app.handle(tap(Button::Mode), 3_000);
-        assert_eq!(app.view(6_000).screen, Screen::Idle(IdleMode::Weather));
-        assert_eq!(app.view(6_500).screen, ART);
+        app.handle(tap(Button::Mode), preview);
+        let end = preview + MODE_LABEL_MS + PREVIEW_MS;
+        assert_eq!(app.view(end - 1).screen, Screen::Idle(IdleMode::Weather));
+        assert_eq!(app.view(end).screen, ART);
     }
 
     #[test]
