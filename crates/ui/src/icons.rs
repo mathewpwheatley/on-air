@@ -96,6 +96,25 @@ where
     Ok(())
 }
 
+/// Like [`draw`], with a 1-pixel black outline so the icon reads on any
+/// background.
+pub fn draw_outlined<D>(icon: Icon, at: Point, scale: u32, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    for Pixel(p, color) in icon.bmp().pixels() {
+        if color == Rgb888::BLACK {
+            continue;
+        }
+        let origin = at + Point::new(p.x * scale as i32, p.y * scale as i32) - Point::new(1, 1);
+        target.fill_solid(
+            &Rectangle::new(origin, Size::new(scale + 2, scale + 2)),
+            Rgb888::BLACK,
+        )?;
+    }
+    draw(icon, at, scale, target)
+}
+
 /// Draw an icon centered horizontally on `center_x`, top edge at `top`.
 pub fn draw_centered<D>(
     icon: Icon,

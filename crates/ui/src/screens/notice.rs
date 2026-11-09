@@ -1,33 +1,12 @@
-//! Short-lived icons over the current screen: button feedback and errors.
+//! Short-lived notices over the current screen: button feedback, errors and
+//! the idle mode name. Button and error notices sit on the faded screen.
 
-use embedded_graphics::{
-    pixelcolor::Rgb888,
-    prelude::*,
-    primitives::{CornerRadii, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
-};
+use embedded_graphics::{pixelcolor::Rgb888, prelude::*, primitives::Rectangle};
 use on_air_core::app::Notice;
 use on_air_core::settings::IdleMode;
 
 use crate::icons::{self, Icon};
-use crate::text::{self, Align, DIM, GREY, SMALL, TINY, WHITE};
-
-const PANEL: Rgb888 = Rgb888::new(0, 0, 0);
-const BORDER: Rgb888 = Rgb888::new(70, 70, 80);
-
-fn backdrop<D>(area: Rectangle, radius: u32, target: &mut D) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb888>,
-{
-    RoundedRectangle::new(area, CornerRadii::new(Size::new(radius, radius)))
-        .into_styled(
-            PrimitiveStyleBuilder::new()
-                .fill_color(PANEL)
-                .stroke_color(BORDER)
-                .stroke_width(1)
-                .build(),
-        )
-        .draw(target)
-}
+use crate::text::{self, Align, DIM, GREY, SMALL, WHITE};
 
 pub fn draw<D>(notice: Notice, target: &mut D) -> Result<(), D::Error>
 where
@@ -47,12 +26,7 @@ where
         _ => None,
     };
     if let Some(icon) = icon {
-        backdrop(
-            Rectangle::new(Point::new(20, 20), Size::new(24, 24)),
-            6,
-            target,
-        )?;
-        return icons::draw(icon, Point::new(23, 23), 2, target);
+        return icons::draw_outlined(icon, Point::new(23, 23), 2, target);
     }
 
     let (first, second) = match notice {
@@ -60,23 +34,18 @@ where
         Notice::NoDevice => ("NO ACTIVE", "DEVICE"),
         _ => ("SPOTIFY", "ERROR"),
     };
-    backdrop(
-        Rectangle::new(Point::new(6, 21), Size::new(52, 22)),
-        3,
-        target,
-    )?;
     text::draw(
-        &TINY,
+        &SMALL,
         first,
-        Point::new(32, 28),
+        Point::new(32, 27),
         Align::Center,
         GREY,
         target,
     )?;
     text::draw(
-        &TINY,
+        &SMALL,
         second,
-        Point::new(32, 36),
+        Point::new(32, 37),
         Align::Center,
         WHITE,
         target,

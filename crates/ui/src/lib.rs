@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+mod dimmed;
 mod framebuffer;
 mod icons;
 mod screens;
@@ -62,13 +63,18 @@ pub fn draw<D>(scene: &Scene, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
-    target.clear(Rgb888::BLACK)?;
-    match scene.view.screen {
-        Screen::Art { dimmed } => screens::art::draw(scene.art, dimmed, target)?,
-        Screen::Idle(mode) => screens::idle::draw(mode, scene, target)?,
-        Screen::Setup => screens::status::setup(scene.setup_network, scene.now_ms, target)?,
-        Screen::Connecting => screens::status::connecting(scene.now_ms, target)?,
-        Screen::SignInNeeded => screens::status::sign_in_needed(target)?,
+    // Button and error notices fade the screen behind them.
+    let fade = scene
+        .view
+        .notice
+        .is_some_and(|n| !matches!(n, Notice::Mode(_) | Notice::TrackInfo));
+    if fade {
+        draw_screen(
+            scene,
+            &mut dimmed::Dimmed::new(target, NOTICE_BACKGROUND_LEVEL),
+        )?;
+    } else {
+        draw_screen(scene, target)?;
     }
     if scene.view.no_wifi {
         // Turn the LEDs behind the badge off so it reads on bright covers.
@@ -84,6 +90,23 @@ where
         None => {}
     }
     Ok(())
+}
+
+/// Brightness of the screen behind a button or error notice, out of 255.
+const NOTICE_BACKGROUND_LEVEL: u8 = 90;
+
+fn draw_screen<D>(scene: &Scene, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    target.clear(Rgb888::BLACK)?;
+    match scene.view.screen {
+        Screen::Art { dimmed } => screens::art::draw(scene.art, dimmed, target),
+        Screen::Idle(mode) => screens::idle::draw(mode, scene, target),
+        Screen::Setup => screens::status::setup(scene.setup_network, scene.now_ms, target),
+        Screen::Connecting => screens::status::connecting(scene.now_ms, target),
+        Screen::SignInNeeded => screens::status::sign_in_needed(target),
+    }
 }
 
 /// Bring-up test pattern: eight vertical color bars over a black-to-white
