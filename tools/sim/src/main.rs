@@ -1,9 +1,10 @@
-//! Desktop simulator: the real On Air app state, screens and inputs in a
+//! Desktop simulator: the real On-Air app state, screens and inputs in a
 //! window, with either a fake player or your real Spotify account.
 
 mod fake;
 mod live;
 mod messages;
+mod portal;
 mod weather;
 
 use std::path::PathBuf;
@@ -18,7 +19,7 @@ use embedded_graphics_simulator::{
 };
 use on_air_core::app::{Action, App, Event, NetStatus, Playback};
 use on_air_core::input::{ADC_MAX, Buttons, DEFAULT_FLOOR, InputEvent, Knob, POLL_INTERVAL_MS};
-use on_air_core::settings::IdleMode;
+use on_air_core::settings::{IdleMode, Settings, WeatherLocation};
 use on_air_core::spotify::NowPlaying;
 use on_air_core::timezone::{self, TimeZone};
 use on_air_core::weather::{Reading, STALE_AFTER_S, Units};
@@ -33,10 +34,11 @@ Keys:
   1+4 held 10 s    factory reset
   - / +            brightness knob down / up (hold to repeat)
   W  toggle WiFi lost    S  toggle Spotify sign-in needed
-  N  stop playback (fake player)    Esc  leave the setup portal";
+  N  stop playback (fake player)    Esc  leave the setup portal
+Setup portal: hold 4 for 5 s (or start with --portal), then use http://127.0.0.1:8080";
 
 /// Environment variables the options read, e.g. from `.env`.
-const ENV_KEYS: [&str; 9] = [
+const ENV_KEYS: [&str; 8] = [
     "SPOTIFY_CLIENT_ID",
     "ON_AIR_LIVE",
     "ON_AIR_CITY",
@@ -44,7 +46,6 @@ const ENV_KEYS: [&str; 9] = [
     "ON_AIR_CLOCK_24H",
     "ON_AIR_TIMEZONE",
     "ON_AIR_RECORD",
-    "ON_AIR_TRACK_INFO",
     "ON_AIR_SCALE",
 ];
 
@@ -52,7 +53,7 @@ const ENV_KEYS: [&str; 9] = [
 const KNOB_STEP: i32 = 256;
 
 #[derive(Parser)]
-#[command(about = "Desktop simulator for the On Air panel", after_help = KEYS_HELP)]
+#[command(about = "Desktop simulator for the On-Air panel", after_help = KEYS_HELP)]
 struct Args {
     /// Use your real Spotify account instead of the built-in fake player.
     #[arg(long, env = "ON_AIR_LIVE")]
@@ -75,10 +76,12 @@ struct Args {
     /// Save each new currently-playing response to this folder (with --live).
     #[arg(long, env = "ON_AIR_RECORD")]
     record: Option<PathBuf>,
-    /// Show the title, artist and album for a few seconds when a new song
-    /// starts. Holding Play/Pause for 2 s shows it either way.
-    #[arg(long, env = "ON_AIR_TRACK_INFO", default_value_t = true, action = clap::ArgAction::Set)]
-    track_info: bool,
+    /// Open the setup portal at start, as if Mode had been held for 5 s.
+    #[arg(long)]
+    portal: bool,
+    /// Don't open pages in the browser; just print their addresses.
+    #[arg(long)]
+    no_browser: bool,
     /// Window pixels per LED.
     #[arg(long, env = "ON_AIR_SCALE", default_value_t = 8)]
     scale: u32,
@@ -95,6 +98,26 @@ fn button_index(key: Keycode) -> Option<usize> {
         Keycode::NUM_3 => Some(2),
         Keycode::NUM_4 => Some(3),
         _ => None,
+    }
+}
+
+/// What the portal starts with: this run's options, as if they'd been saved
+/// on a device. WiFi starts empty so the portal begins at step 1.
+fn portal_settings(args: &Args, units: Units, clock_24h: bool) -> Settings {
+    let client_id = args.client_id.clone().unwrap_or_default();
+    Settings {
+        spotify_refresh_token: live::load_refresh_token(&client_id),
+        spotify_client_id: client_id,
+        timezone: args.timezone.clone().unwrap_or_default(),
+        // The city's position isn't known here; the portal only shows its name.
+        weather: args.city.clone().map(|city| WeatherLocation {
+            city,
+            lat: 0.0,
+            lon: 0.0,
+        }),
+        units,
+        clock_24h,
+        ..Settings::default()
     }
 }
 
@@ -137,6 +160,7 @@ fn main() {
         let tx = update_tx.clone();
         std::thread::spawn(move || fake::run(tx, control_rx));
     }
+    let (weather_generation, weather_counter) = weather::Generation::first();
     match args.city.clone() {
         Some(city) => {
             let units = if args.fahrenheit {
@@ -145,17 +169,21 @@ fn main() {
                 Units::Celsius
             };
             let tx = update_tx.clone();
-            std::thread::spawn(move || weather::run(city, units, tx));
+            std::thread::spawn(move || weather::run(city, units, tx, weather_generation));
         }
         None => weather::fake(update_tx.clone()),
     }
-    drop(update_tx);
+    // Kept for the setup portal, which starts later.
+    let portal_updates = update_tx;
+    let mut portal_started = false;
 
-    let units = if args.fahrenheit {
+    let mut units = if args.fahrenheit {
         Units::Fahrenheit
     } else {
         Units::Celsius
     };
+    let mut clock_24h = args.clock_24h;
+    let mut weather_location = portal_settings(&args, units, clock_24h).weather;
     let mut zone = args
         .timezone
         .as_deref()
@@ -171,7 +199,7 @@ fn main() {
         .scale(args.scale)
         .pixel_spacing(1)
         .build();
-    let mut window = Window::new("On Air", &settings);
+    let mut window = Window::new("On-Air", &settings);
     let mut display = SimulatorDisplay::<Rgb888>::new(Size::new(WIDTH, HEIGHT));
     let mut framebuffer = Framebuffer::new();
 
@@ -179,13 +207,23 @@ fn main() {
     // A made-up MAC address; the device uses its real one.
     let setup_network = on_air_core::setup::network_name([0x34, 0x85, 0x18, 0x00, 0x1a, 0x2b]);
     let mut app = App::new(IdleMode::DigitalClock);
-    app.set_track_info_on_change(args.track_info);
     let mut track: Option<NowPlaying> = None;
     let mut buttons = Buttons::new();
     let mut knob = Knob::new(DEFAULT_FLOOR);
     let mut knob_position: i32 = ADC_MAX as i32 * 3 / 4;
     let mut brightness: u8 = 255;
     let mut pressed = [false; 4];
+    if args.portal {
+        app.handle(Event::Net(NetStatus::Portal), 0);
+        portal_started = true;
+        let settings = portal_settings(&args, units, clock_24h);
+        portal::start(
+            settings,
+            setup_network.clone(),
+            portal_updates.clone(),
+            !args.no_browser,
+        );
+    }
     let mut art: Option<Vec<u8>> = None;
     let mut weather: Option<(Reading, Instant)> = None;
     let mut no_wifi = false;
@@ -275,11 +313,20 @@ fn main() {
                     Action::OpenPortal => {
                         println!("setup portal opened (Esc to leave)");
                         app.handle(Event::Net(NetStatus::Portal), now);
+                        if !portal_started {
+                            portal_started = true;
+                            let settings = portal_settings(&args, units, clock_24h);
+                            portal::start(
+                                settings,
+                                setup_network.clone(),
+                                portal_updates.clone(),
+                                !args.no_browser,
+                            );
+                        }
                     }
                     Action::FactoryReset => {
                         println!("factory reset");
                         app = App::new(IdleMode::DigitalClock);
-                        app.set_track_info_on_change(args.track_info);
                         app.handle(Event::Net(NetStatus::Online), now);
                     }
                 }
@@ -307,10 +354,6 @@ fn main() {
                         has_art: art.is_some(),
                     };
                     app.handle(Event::Playback(playback), now);
-                    let is_new = track.as_ref().map(|t| &t.item_id) != Some(&now_playing.item_id);
-                    if is_new && now_playing.is_playing {
-                        app.handle(Event::TrackStarted, now);
-                    }
                     track = Some(now_playing);
                 }
                 Update::NowPlaying(None) => {
@@ -329,6 +372,30 @@ fn main() {
                     app.handle(Event::CommandFailed(failure), now);
                 }
                 Update::Weather(reading) => weather = Some((reading, Instant::now())),
+                Update::DisplaySaved(settings) => {
+                    clock_24h = settings.clock_24h;
+                    if let Some(found) = timezone::find(&settings.timezone) {
+                        zone = found;
+                    }
+                    // Restart the weather only if the city or units changed.
+                    if settings.weather != weather_location || settings.units != units {
+                        units = settings.units;
+                        weather_location = settings.weather.clone();
+                        let generation = weather::Generation::next(&weather_counter);
+                        weather = None;
+                        if let Some(place) = settings.weather {
+                            let tx = portal_updates.clone();
+                            std::thread::spawn(move || {
+                                weather::run_at(place.lat, place.lon, units, tx, generation)
+                            });
+                        }
+                    }
+                    println!("display settings applied");
+                }
+                Update::PortalDone => {
+                    println!("setup finished");
+                    app.handle(Event::Net(NetStatus::Online), now);
+                }
                 Update::Timezone(name) => {
                     if args.timezone.is_none()
                         && let Some(found) = find_timezone(&name)
@@ -348,7 +415,7 @@ fn main() {
             view: app.view(now),
             art: art.as_deref(),
             time: timezone::local_time(&zone, unix_s),
-            clock_24h: args.clock_24h,
+            clock_24h,
             weather: weather.map(|(reading, at)| WeatherInfo {
                 reading,
                 stale: at.elapsed().as_secs() > STALE_AFTER_S,

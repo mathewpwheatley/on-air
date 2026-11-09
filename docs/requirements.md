@@ -1,10 +1,10 @@
-# On Air — Product Requirements
+# On-Air — Product Requirements
 
 **Status:** Draft v0.1 · **Date:** 2026-11-07 · **Owner:** Mathew Wheatley
 
 ## 1. Overview
 
-On Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of whatever is playing on the owner's Spotify account. It also has a brightness knob and four playback buttons. Think of it as a home-built [Tuneshine](https://www.tuneshine.rocks/).
+On-Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of whatever is playing on the owner's Spotify account. It also has a brightness knob and four playback buttons. Think of it as a home-built [Tuneshine](https://www.tuneshine.rocks/).
 
 ### Goals
 
@@ -32,7 +32,7 @@ On Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 5. As a listener, I press buttons on the device to pause, skip or go back.
 6. As the owner, when no music is playing, the panel shows a clock (analog or digital), the weather, a clock plus the weather, or nothing, instead of stale art. I pick which with the mode button.
 7. As the owner, if my WiFi password changes, I hold a button to reopen the setup portal.
-8. As a listener, I can see the song title, artist and album: briefly when a song starts (if I've turned that on), or any time by holding Play/Pause.
+8. As a listener, I hold Play/Pause to see the song title, artist and album.
 
 ## 3. Functional requirements
 
@@ -52,7 +52,7 @@ On Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 | D-10 | **Weather:** a condition icon (sun, cloud, rain, snow, storm, fog), the current temperature, and today's high and low. Units are °C or °F (configurable). |
 | D-11 | **Clock + weather:** a digital clock on the top half and a weather icon plus current temperature on the bottom half. |
 | D-12 | If weather data is unavailable or older than 2 h, the weather screens show the last known data with a small "stale" marker, or a "No weather" icon if there is none. The clock keeps working. |
-| D-13 | **Track info:** title, artist and album (or show, for podcasts) over the cover dimmed to about 20%, for 5 s. Lines too wide for the panel scroll. Shown by holding Play/Pause for 2 s, and when a new song starts if `ui.track_info_on_change` is on (default on). |
+| D-13 | **Track info:** title, artist and album (or show, for podcasts) over the cover dimmed to about 20%, for 5 s. Lines too wide for the panel scroll. Shown by holding Play/Pause for 2 s. |
 
 ```mermaid
 stateDiagram-v2
@@ -109,7 +109,7 @@ stateDiagram-v2
 |---|---|
 | P-1 | If no WiFi credentials are stored, or the stored network can't be joined after 30 s, start a soft AP named `OnAir-Setup-XXXX` (last 4 hex digits of the MAC). |
 | P-2 | Run a DNS responder that answers every query with the device's IP, so phones open the captive-portal page automatically. |
-| P-3 | The portal page lists nearby networks, takes the WiFi password, the Spotify Client ID, the timezone, the weather location (city), temperature units, 12/24 h clock and whether to show track info when a song starts, and shows a **Connect Spotify** link. |
+| P-3 | The portal page has four steps: **WiFi** (nearby networks or a typed name, and the password), **Spotify** (Client ID, the app setup instructions and a **Connect Spotify** link), **Clock and weather** (city search, required since it sets the clock's timezone; temperature units; 12/24 h clock) and **Finish**. The clock's timezone comes from the chosen city. |
 | P-4 | **Spotify sign-in (paste-back flow):** the link opens Spotify's authorize page with `redirect_uri=http://127.0.0.1:8888/callback`. After approval the browser lands on a page that fails to load. The user copies that full URL into the portal. The device extracts `code` and exchanges it, together with its stored PKCE verifier, for tokens. To reach Spotify, the device joins the home WiFi while keeping the setup AP running (AP+STA mode). See Q-4. *(This is needed because Spotify only accepts HTTPS or loopback redirect URIs, and the device can't serve HTTPS with a trusted certificate.)* |
 | P-5 | On success, save the settings, show a confirmation, and reboot into normal mode. |
 | P-6 | Holding **Mode** for 5 s at any time reopens the portal. Holding **Mode + Play** for 10 s erases all settings. |
@@ -118,7 +118,7 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
     actor Owner as Owner's phone
-    participant Dev as On Air
+    participant Dev as On-Air
     participant Acc as accounts.spotify.com
 
     Dev->>Dev: Start soft AP, generate PKCE verifier + challenge
@@ -311,7 +311,6 @@ stateDiagram-v2
 | `weather.city` | City name as typed in the portal |
 | `weather.lat` / `weather.lon` | Coordinates from geocoding |
 | `weather.units` | `c` / `f` |
-| `ui.track_info_on_change` | `true` / `false`: show track info when a song starts |
 
 ## 7. Repository layout
 
@@ -370,4 +369,4 @@ The software side of each milestone is broken down in [implementation-plan.md](i
 1. Create an app at <https://developer.spotify.com/dashboard>.
 2. Add the redirect URI `http://127.0.0.1:8888/callback`.
 3. Select **Web API**.
-4. Copy the **Client ID** into the On Air setup portal.
+4. Copy the **Client ID** into the On-Air setup portal.

@@ -1,4 +1,4 @@
-# On Air
+# On-Air
 
 A wall-powered 64×64 RGB LED panel that shows the album art of whatever is playing on Spotify. It's a DIY take on the [Tuneshine](https://www.tuneshine.rocks/).
 
@@ -39,6 +39,7 @@ Day to day:
 - Options can also go in a `.env` file: copy [.env.example](.env.example) to `.env` and fill it in. Command-line options override it.
 - `just sim --city Portland` shows real weather from Open-Meteo, and the clock uses the city's timezone.
 - `just sim --live --client-id <id>` follows your real Spotify account. It needs a Spotify developer app set up as in [requirements §10](docs/requirements.md#10-spotify-app-setup-owner-one-time). The first run opens a browser to sign in, and the session is saved to `~/Library/Application Support/on-air-sim/session.json`.
+- `just sim --portal` opens the setup portal at <http://127.0.0.1:8080>, the same page the device serves to your phone. WiFi is pretend (the password `wrongpassword` fails on purpose); city search and the Spotify sign-in are real. You can also hold 4 for 5 s while it runs.
 - Add `--record <folder>` to save the raw Spotify responses, for use as test fixtures (scrub them first).
 
 ## Status

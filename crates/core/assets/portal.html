@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>On-Air Setup</title>
+<style>
+:root {
+  --bg: #111114; --card: #1c1c21; --line: #2e2e36; --text: #ececf1;
+  --muted: #9a9aa6; --accent: #ffb020; --error: #ff6b6b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px; background: var(--bg); color: var(--text); accent-color: var(--accent);
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 480px; margin: 0 auto; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+h1 { font-size: 1.5rem; margin: 8px 0 2px; }
+.sub { color: var(--muted); margin: 0 0 20px; font-size: .9rem; }
+section {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  margin-bottom: 12px; overflow: hidden;
+}
+/* The step header doubles as the button that opens and closes the step. */
+.head {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 16px;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.step {
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--line); font-size: .85rem; font-weight: 600; flex: none;
+}
+.done .step { background: var(--accent); color: #000; }
+.title { flex: 1; }
+.title b { display: block; font-size: 1.05rem; }
+.summary { display: block; font-size: .85rem; color: var(--muted); }
+.edit { font-size: .85rem; color: var(--accent); }
+section.open .edit { display: none; }
+.body { display: none; padding: 0 16px 16px; }
+section.open .body { display: block; }
+label { display: block; font-size: .9rem; color: var(--muted); margin: 12px 0 4px; }
+input[type=text], input[type=password], select, textarea {
+  width: 100%; padding: 12px; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+}
+textarea { min-height: 90px; resize: vertical; font-size: .85rem; }
+.row { display: flex; gap: 8px; }
+.row > input { flex: 1; min-width: 0; }
+/* Big, full-width buttons: these are phone screens. */
+button.action, a.action {
+  display: block; width: 100%; margin-top: 16px; padding: 14px 16px;
+  font: inherit; font-weight: 600; text-align: center; text-decoration: none;
+  color: #000; background: var(--accent); border: 0; border-radius: 10px; cursor: pointer;
+}
+button.secondary {
+  padding: 0 16px; font: inherit; font-weight: 600; color: var(--text);
+  background: var(--line); border: 0; border-radius: 8px; cursor: pointer;
+}
+button:disabled { opacity: .45; cursor: default; }
+.choices { display: flex; gap: 12px; flex-wrap: wrap; }
+.choices label { white-space: nowrap; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+/* Side by side, each group's options stack so they never wrap oddly. */
+.pair .choices { flex-direction: column; gap: 0; }
+.choices label, .check { display: flex; align-items: center; gap: 8px; color: var(--text); margin: 6px 0; }
+.error { color: var(--error); font-size: .85rem; margin-top: 4px; }
+.error:empty { display: none; }
+.status { margin-top: 10px; font-size: .9rem; color: var(--muted); text-align: center; }
+.status:empty { display: none; }
+.status.ok { color: var(--accent); }
+.status.bad { color: var(--error); }
+.hint { font-size: .9rem; color: var(--muted); }
+.hint ol { padding-left: 20px; margin: 6px 0; }
+code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .85rem; }
+#places label { padding: 8px 0; border-bottom: 1px solid var(--line); margin: 0; }
+.hidden { display: none; }
+#finish { padding: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>On-Air Setup</h1>
+  <p class="sub">Connected to <span id="network-name">the setup network</span></p>
+
+  <section id="step-wifi">
+    <button class="head" type="button">
+      <span class="step">1</span>
+      <span class="title"><b>WiFi</b><span class="summary">Not connected</span></span>
+      <span class="edit">Edit</span>
+    </button>
+    <div class="body">
+      <form id="wifi-form">
+        <label for="ssid-list">Network</label>
+        <select id="ssid-list"><option value="">Looking for networks…</option></select>
+        <input type="text" id="ssid-other" class="hidden" placeholder="Network name" autocapitalize="off" autocomplete="off">
+        <div class="error" data-error="ssid"></div>
+        <label for="password">Password</label>
+        <input type="password" id="password" autocomplete="off">
+        <label class="check"><input type="checkbox" id="show-password"> Show password</label>
+        <div class="error" data-error="password"></div>
+        <button class="action" type="submit">Connect</button>
+        <div class="status" id="wifi-status"></div>
+      </form>
+    </div>
+  </section>
+
+  <section id="step-spotify">
+    <button class="head" type="button">
+      <span class="step">2</span>
+      <span class="title"><b>Spotify</b><span class="summary">Not signed in</span></span>
+      <span class="edit">Edit</span>
+    </button>
+    <div class="body">
+      <div class="hint">
+        You need a free Spotify developer app:
+        <ol>
+          <li>Open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and create an app.</li>
+          <li>Add this redirect URI: <code>http://127.0.0.1:8888/callback</code></li>
+          <li>Tick <b>Web API</b>, save, and copy the app's <b>Client ID</b>.</li>
+        </ol>
+      </div>
+      <form id="spotify-start">
+        <label for="client-id">Client ID</label>
+        <input type="text" id="client-id" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <div class="error" data-error="client_id"></div>
+        <button class="action" type="submit" id="connect-spotify">Connect Spotify</button>
+        <div class="status" id="spotify-status"></div>
+      </form>
+      <form id="spotify-finish" class="hidden">
+        <a id="authorize-link" class="action" target="_blank" rel="noopener">Open Spotify sign-in</a>
+        <p class="hint">
+          After you tap <b>Agree</b>, Spotify opens a page that won't load. That's expected.
+          Copy that page's whole address and paste it here.
+        </p>
+        <label for="callback-url">Address of the page that didn't load</label>
+        <textarea id="callback-url" autocapitalize="off" spellcheck="false" placeholder="http://127.0.0.1:8888/callback?code=…"></textarea>
+        <button class="action" type="submit">Finish sign-in</button>
+        <div class="status" id="finish-status"></div>
+      </form>
+    </div>
+  </section>
+
+  <section id="step-display">
+    <button class="head" type="button">
+      <span class="step">3</span>
+      <span class="title"><b>Clock and weather</b><span class="summary"></span></span>
+      <span class="edit">Edit</span>
+    </button>
+    <div class="body">
+      <form id="display-form">
+        <label for="city-search">City, for the clock's timezone and the weather</label>
+        <div class="row">
+          <input type="text" id="city-search" placeholder="e.g. Portland">
+          <button type="button" class="secondary" id="city-button">Search</button>
+        </div>
+        <div id="places">
+          <label class="hidden" id="keep-place"><input type="radio" name="place" value="keep" checked> <span></span></label>
+        </div>
+        <div class="error" data-error="place"></div>
+        <div class="pair">
+          <div>
+            <label>Temperature</label>
+            <div class="choices">
+              <label><input type="radio" name="units" value="c" checked> °C</label>
+              <label><input type="radio" name="units" value="f"> °F</label>
+            </div>
+          </div>
+          <div>
+            <label>Clock</label>
+            <div class="choices">
+              <label><input type="radio" name="clock" value="12" checked> 12-hour</label>
+              <label><input type="radio" name="clock" value="24"> 24-hour</label>
+            </div>
+          </div>
+        </div>
+        <button class="action" type="submit">Save</button>
+        <div class="status" id="display-status"></div>
+      </form>
+    </div>
+  </section>
+
+  <section id="finish">
+    <div class="hint">On-Air restarts and starts showing what you're playing.</div>
+    <button class="action" id="done" disabled>Finish Setup</button>
+    <div class="status" id="done-status"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const STEPS = ["#step-wifi", "#step-spotify", "#step-display"];
+const state = { wifi: false, ssid: "", spotify: false, city: "", units: "c", clock: "12" };
+
+async function api(path, data) {
+  const options = data
+    ? { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(data) }
+    : {};
+  try {
+    const response = await fetch(path, options);
+    return await response.json();
+  } catch (e) {
+    return { ok: false, message: "Lost contact with On-Air. Check you're still on its setup network." };
+  }
+}
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.className = "status" + (kind ? " " + kind : "");
+}
+
+function showErrors(form, errors) {
+  form.querySelectorAll(".error").forEach((e) => (e.textContent = ""));
+  for (const [field, message] of Object.entries(errors || {})) {
+    const el = form.querySelector(`[data-error="${field}"]`);
+    if (el) el.textContent = message;
+  }
+}
+
+// Open one step and close the others. `null` closes them all.
+function openStep(id) {
+  for (const s of STEPS) $(s).classList.toggle("open", s === id);
+  if (id) $(id).scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function setSummary(id, text, done) {
+  $(id).querySelector(".summary").textContent = text;
+  $(id).classList.toggle("done", done);
+}
+
+function refresh() {
+  setSummary("#step-wifi", state.wifi ? `Connected to ${state.ssid}` : "Not connected", state.wifi);
+  setSummary("#step-spotify", state.spotify ? "Signed in" : "Not signed in", state.spotify);
+  const place = state.city || "No city yet";
+  const units = state.units === "f" ? "°F" : "°C";
+  const clock = state.clock === "24" ? "24-hour" : "12-hour";
+  setSummary("#step-display", `${place} · ${units} · ${clock}`, !!state.city);
+  $("#connect-spotify").disabled = !state.wifi;
+  if (!state.wifi) setStatus($("#spotify-status"), "Connect WiFi first, so On-Air can reach Spotify.");
+  else if ($("#spotify-status").textContent.startsWith("Connect WiFi")) setStatus($("#spotify-status"), "");
+  $("#done").disabled = !(state.wifi && state.spotify && state.city);
+}
+
+// The first step that still needs doing, or none if setup is complete.
+function nextStep() {
+  if (!state.wifi) return "#step-wifi";
+  if (!state.spotify) return "#step-spotify";
+  if (!state.city) return "#step-display";
+  return null;
+}
+
+for (const id of STEPS) {
+  $(id).querySelector(".head").addEventListener("click", () => {
+    openStep($(id).classList.contains("open") ? null : id);
+  });
+}
+
+async function loadStatus() {
+  const s = await api("/api/status");
+  if (s.ok === false) return;
+  $("#network-name").textContent = s.network_name;
+  Object.assign(state, {
+    wifi: s.wifi === "connected", ssid: s.wifi_ssid, spotify: s.spotify_signed_in,
+    city: s.city, units: s.units, clock: s.clock,
+  });
+  $("#client-id").value = s.spotify_client_id || "";
+  if (s.city) {
+    const keep = $("#keep-place");
+    keep.querySelector("span").textContent = `Keep ${s.city}`;
+    keep.classList.remove("hidden");
+  }
+  document.querySelector(`input[name=units][value="${s.units}"]`).checked = true;
+  document.querySelector(`input[name=clock][value="${s.clock}"]`).checked = true;
+  refresh();
+  openStep(nextStep());
+}
+
+async function loadNetworks() {
+  const networks = await api("/api/networks");
+  const list = $("#ssid-list");
+  list.innerHTML = "";
+  for (const n of Array.isArray(networks) ? networks : []) {
+    const option = document.createElement("option");
+    option.value = n.ssid;
+    option.textContent = `${n.ssid}${n.secure ? "" : " (open)"}`;
+    list.append(option);
+  }
+  const other = document.createElement("option");
+  other.value = "";
+  other.textContent = "Other network…";
+  list.append(other);
+  list.dispatchEvent(new Event("change"));
+}
+
+$("#ssid-list").addEventListener("change", () => {
+  $("#ssid-other").classList.toggle("hidden", $("#ssid-list").value !== "");
+});
+$("#show-password").addEventListener("change", (e) => {
+  $("#password").type = e.target.checked ? "text" : "password";
+});
+
+$("#wifi-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const ssid = $("#ssid-list").value || $("#ssid-other").value.trim();
+  const reply = await api("/api/wifi", { ssid, password: $("#password").value });
+  showErrors(form, reply.errors);
+  if (!reply.ok) {
+    if (reply.message) setStatus($("#wifi-status"), reply.message, "bad");
+    return;
+  }
+  setStatus($("#wifi-status"), `Connecting to ${ssid}…`);
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const s = await api("/api/status");
+    if (s.wifi === "connected") {
+      setStatus($("#wifi-status"), "");
+      Object.assign(state, { wifi: true, ssid });
+      refresh();
+      openStep(nextStep() || "#step-display");
+      return;
+    }
+    if (s.wifi === "failed") break;
+  }
+  setStatus($("#wifi-status"), `Couldn't connect to ${ssid}. Check the password and try again.`, "bad");
+});
+
+$("#spotify-start").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const reply = await api("/api/spotify/start", { client_id: $("#client-id").value });
+  showErrors(e.target, reply.errors);
+  if (!reply.ok) {
+    if (reply.message) setStatus($("#spotify-status"), reply.message, "bad");
+    return;
+  }
+  setStatus($("#spotify-status"), "");
+  $("#authorize-link").href = reply.authorize_url;
+  $("#spotify-finish").classList.remove("hidden");
+  $("#callback-url").value = "";
+  setStatus($("#finish-status"), "");
+  window.open(reply.authorize_url, "_blank");
+});
+
+$("#spotify-finish").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setStatus($("#finish-status"), "Signing in…");
+  const reply = await api("/api/spotify/finish", { callback_url: $("#callback-url").value });
+  if (!reply.ok) {
+    setStatus($("#finish-status"), reply.message || "Sign-in failed. Try again.", "bad");
+    return;
+  }
+  setStatus($("#finish-status"), "");
+  $("#spotify-finish").classList.add("hidden");
+  state.spotify = true;
+  refresh();
+  openStep("#step-display");
+});
+
+$("#city-button").addEventListener("click", async () => {
+  const query = $("#city-search").value.trim();
+  if (!query) return;
+  const places = await api("/api/places?q=" + encodeURIComponent(query));
+  const box = $("#places");
+  box.querySelectorAll(".found").forEach((el) => el.remove());
+  const list = Array.isArray(places) ? places : [];
+  if (!list.length) {
+    showErrors($("#display-form"), { place: places.message || `No city called "${query}". Try another spelling.` });
+    return;
+  }
+  showErrors($("#display-form"), {});
+  // Prepend in reverse so the best match ends up first, and select it.
+  list.slice().reverse().forEach((p, i) => {
+    const label = document.createElement("label");
+    label.className = "found";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "place";
+    input.value = "set";
+    input.dataset.place = JSON.stringify(p);
+    input.checked = i === list.length - 1;
+    label.append(input, " " + p.label);
+    box.prepend(label);
+  });
+});
+
+$("#display-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const data = new URLSearchParams(new FormData(form));
+  const picked = form.querySelector("input[name=place]:checked");
+  let city = state.city;
+  if (picked && picked.value === "set") {
+    const p = JSON.parse(picked.dataset.place);
+    data.set("city", p.city);
+    data.set("lat", p.lat);
+    data.set("lon", p.lon);
+    data.set("timezone", p.timezone);
+    city = p.city;
+  } else if (!picked || $("#keep-place").classList.contains("hidden")) {
+    showErrors(form, { place: "Search for your city and pick it from the list." });
+    return;
+  }
+  const reply = await api("/api/display", data);
+  showErrors(form, reply.errors);
+  if (!reply.ok) {
+    if (reply.message) setStatus($("#display-status"), reply.message, "bad");
+    return;
+  }
+  Object.assign(state, { city, units: data.get("units"), clock: data.get("clock") });
+  refresh();
+  openStep(nextStep());
+  $("#finish").scrollIntoView({ behavior: "smooth" });
+});
+
+$("#done").addEventListener("click", async () => {
+  const reply = await api("/api/done", {});
+  if (reply.ok) {
+    setStatus($("#done-status"), "Done. On-Air is restarting. You can close this page.", "ok");
+    $("#done").disabled = true;
+  } else {
+    setStatus($("#done-status"), reply.message || "Something went wrong.", "bad");
+  }
+});
+
+refresh();
+loadStatus();
+loadNetworks();
+</script>
+</body>
+</html>

@@ -30,13 +30,13 @@ fn session_path() -> PathBuf {
         .join("session.json")
 }
 
-fn load_refresh_token(client_id: &str) -> Option<String> {
+pub fn load_refresh_token(client_id: &str) -> Option<String> {
     let text = std::fs::read_to_string(session_path()).ok()?;
     let session: Session = serde_json::from_str(&text).ok()?;
     (session.client_id == client_id).then_some(session.refresh_token)
 }
 
-fn save_refresh_token(client_id: &str, refresh_token: &str) {
+pub fn save_refresh_token(client_id: &str, refresh_token: &str) {
     let path = session_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -381,7 +381,7 @@ fn sign_in(http: &Client, client_id: &str) -> Result<String, String> {
         match auth::parse_callback(request.url(), &state) {
             Ok(code) => {
                 let _ = request.respond(tiny_http::Response::from_string(
-                    "Signed in to On Air. You can close this tab.",
+                    "Signed in to On-Air. You can close this tab.",
                 ));
                 break code;
             }

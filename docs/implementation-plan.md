@@ -1,4 +1,4 @@
-# On Air — Software Implementation Plan
+# On-Air — Software Implementation Plan
 
 **Status:** Draft v0.1 · **Date:** 2026-11-08 · **Owner:** Mathew Wheatley
 
@@ -9,7 +9,7 @@ How the firmware gets built, in what order, and how each piece is tested. Requir
 - **Host first.** Most of the logic (Spotify parsing, OAuth, polling schedule, state machine, screens, input handling) doesn't need hardware. It goes in `no_std` crates that build and test on the Mac. Work can start before the MatrixPortal arrives.
 - **One rendering path.** Every screen is drawn through `embedded-graphics`, so the same code runs in a desktop simulator and on the panel.
 - **Thin firmware.** The `firmware/` crate only wires hardware, network and tasks to the shared crates. If it holds logic that could be tested on the host, move it out.
-- **Use existing crates.** Reach for a maintained crate before writing anything. Only write logic that's specific to On Air. §2.4 lists the choices.
+- **Use existing crates.** Reach for a maintained crate before writing anything. Only write logic that's specific to On-Air. §2.4 lists the choices.
 - **Spike the risky parts early.** Panel driver (R-1), TLS (R-2) and AP+STA WiFi (P-4) each get a small proof before features are built on them.
 
 ```mermaid
@@ -129,7 +129,7 @@ Every crate must build without the standard library (except in `tools/sim`), and
 | Portal web server | `picoserve` | firmware |
 | Settings storage | `sequential-storage` | firmware |
 
-Still hand-written, because they're short and specific to On Air:
+Still hand-written, because they're short and specific to On-Air:
 - the backoff
 - the poll schedule
 - the button taps and holds
@@ -231,12 +231,14 @@ Each phase lists its tasks and when it counts as done.
 ### P7 — Setup portal (M4)
 
 - Soft AP `OnAir-Setup-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
-- Form page with a WiFi scan list and the fields from P-3. Plain HTML with a little inline JS, served from flash.
-- Paste-back sign-in using `core::auth`, then the token exchange over AP+STA.
+- Serve `core::portal::PAGE` and the routes listed in `core::portal` with `picoserve`. The page, form checking, sign-in session and JSON replies are already built and tested; the device supplies the WiFi scan, joining, geocoding and the token exchange.
+- Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA.
 - Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6).
 - **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction.
 
 **Done when:** a factory-reset device goes from first boot to showing art using only a phone.
+
+**Done early, on the host (2026-11-09):** the portal page (`crates/core/assets/portal.html`, about 14 KB) and `core::portal` (form checking, sign-in session, status and JSON replies, captive-portal probe paths), with tests. The simulator serves it at `http://127.0.0.1:8080` (`just sim --portal`), with pretend WiFi and real city search and Spotify sign-in.
 
 ### P8 — Idle screens on device (M5)
 
@@ -273,6 +275,6 @@ Each phase lists its tasks and when it counts as done.
 |---|---|---|---|
 | 1 | TLS library (R-2) | P5 | `esp-mbedtls` |
 | 2 | JSON parsing: `serde_json` + `alloc` or `serde-json-core` | P1 | `serde_json` + `alloc`. The heap is in PSRAM anyway and it's simpler. |
-| 3 | Timezone entry in the portal | P7 | Take the timezone from the city lookup. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. That would remove the timezone field from the portal (P-3). |
+| 3 | Timezone entry in the portal | Done | Decided: the timezone comes from the city picked in the portal. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. |
 | 4 | Logging: `log` + `esp-println` or `defmt` | P0 | `log` to start, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
 | 5 | Q-4 fix for phone internet during sign-in | P7 | Decide after testing on real phones. |

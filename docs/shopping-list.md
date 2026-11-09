@@ -1,4 +1,4 @@
-# On Air — Shopping List
+# On-Air — Shopping List
 
 Parts still to buy from the bill of materials in [requirements.md §5.1](requirements.md#51-bill-of-materials). Links are Amazon searches, so check each listing against the "Check for" column before buying.
 

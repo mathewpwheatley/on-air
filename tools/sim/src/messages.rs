@@ -1,6 +1,7 @@
 //! Messages between the window thread and the background sources.
 
 use on_air_core::app::{CommandFailure, NetStatus};
+use on_air_core::settings::Settings;
 use on_air_core::spotify::{Command, NowPlaying};
 use on_air_core::weather::Reading;
 
@@ -18,6 +19,10 @@ pub enum Update {
     Weather(Reading),
     /// IANA timezone of the weather city, used when `--timezone` isn't given.
     Timezone(String),
+    /// The setup portal saved new clock and weather settings.
+    DisplaySaved(Settings),
+    /// The owner pressed Finish setup.
+    PortalDone,
 }
 
 /// From the window to the music source.

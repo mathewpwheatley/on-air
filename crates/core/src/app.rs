@@ -56,8 +56,6 @@ pub enum Event {
     SignedIn,
     Input(InputEvent),
     CommandFailed(CommandFailure),
-    /// A different song or episode started playing.
-    TrackStarted,
 }
 
 /// Something for another task to do.
@@ -131,7 +129,6 @@ pub struct App {
     preview_until: u64,
     /// The notice, when it started and when it ends.
     notice: Option<(Notice, u64, u64)>,
-    track_info_on_change: bool,
 }
 
 impl App {
@@ -149,13 +146,7 @@ impl App {
             idle_after_ms,
             preview_until: 0,
             notice: None,
-            track_info_on_change: true,
         }
-    }
-
-    /// Whether to show the track info each time a new song starts.
-    pub fn set_track_info_on_change(&mut self, enabled: bool) {
-        self.track_info_on_change = enabled;
     }
 
     pub fn idle_mode(&self) -> IdleMode {
@@ -196,12 +187,6 @@ impl App {
                     CommandFailure::Other => Notice::Error,
                 };
                 self.show(notice, now, NOTICE_MS);
-                None
-            }
-            Event::TrackStarted => {
-                if self.track_info_on_change {
-                    self.show(Notice::TrackInfo, now, TRACK_INFO_MS);
-                }
                 None
             }
         }
@@ -469,29 +454,16 @@ mod tests {
     }
 
     #[test]
-    fn new_track_shows_info_when_enabled() {
+    fn play_hold_shows_track_info() {
         let mut app = online(IdleMode::DigitalClock);
-        app.handle(track(true), 0);
-        app.handle(Event::TrackStarted, 100);
-        assert_eq!(app.view(100).notice, Some(Notice::TrackInfo));
-        assert_eq!(app.view(2_100).notice_age_ms, 2_000);
-        assert_eq!(app.view(5_100).notice, None);
-
-        app.set_track_info_on_change(false);
-        app.handle(Event::TrackStarted, 10_000);
-        assert_eq!(app.view(10_000).notice, None);
-    }
-
-    #[test]
-    fn play_hold_shows_info_even_when_auto_show_is_off() {
-        let mut app = online(IdleMode::DigitalClock);
-        app.set_track_info_on_change(false);
         app.handle(track(true), 0);
         assert_eq!(
             app.handle(Event::Input(InputEvent::ShowTrackInfo), 50),
             None
         );
         assert_eq!(app.view(50).notice, Some(Notice::TrackInfo));
+        assert_eq!(app.view(2_050).notice_age_ms, 2_000);
+        assert_eq!(app.view(5_050).notice, None);
         // No play/pause command from the hold.
         assert!(app.is_playing());
     }

@@ -1,4 +1,4 @@
-# On Air task runner. Run `just` to list recipes.
+# On-Air task runner. Run `just` to list recipes.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 

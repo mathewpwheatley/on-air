@@ -1,4 +1,4 @@
-//! Hardware-independent On Air logic.
+//! Hardware-independent On-Air logic.
 //!
 //! Everything here builds for both the host (for tests and the simulator) and
 //! the ESP32-S3. Keep it free of hardware and network code: callers pass in
@@ -13,6 +13,7 @@ pub mod auth;
 pub mod backoff;
 pub mod image;
 pub mod input;
+pub mod portal;
 pub mod schedule;
 pub mod settings;
 pub mod setup;

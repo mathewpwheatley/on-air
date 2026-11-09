@@ -1,4 +1,4 @@
-//! On Air screens.
+//! On-Air screens.
 //!
 //! Every screen draws onto any `DrawTarget<Color = Rgb888>`, so the same code
 //! runs in the desktop simulator and on the panel. [`draw`] renders a whole
