@@ -1,0 +1,12 @@
+[package]
+name = "on-air-sim"
+description = "Desktop simulator for the On Air panel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+on-air-ui.workspace = true
+embedded-graphics.workspace = true
+embedded-graphics-simulator.workspace = true

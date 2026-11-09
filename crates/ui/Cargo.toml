@@ -1,0 +1,11 @@
+[package]
+name = "on-air-ui"
+description = "On Air screens, drawn on any embedded-graphics DrawTarget."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+on-air-core.workspace = true
+embedded-graphics.workspace = true

@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/ui", "tools/sim"]
+# The firmware needs the Xtensa toolchain and its own target, so it builds
+# on its own from firmware/ and depends on these crates by path.
+exclude = ["firmware"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+on-air-core = { path = "crates/core" }
+on-air-ui = { path = "crates/ui" }
+embedded-graphics = "0.8.2"
+embedded-graphics-simulator = "0.8.0"

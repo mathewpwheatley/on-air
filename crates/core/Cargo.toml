@@ -1,0 +1,9 @@
+[package]
+name = "on-air-core"
+description = "Hardware-independent On Air logic: models, parsing, state machine, scheduling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
