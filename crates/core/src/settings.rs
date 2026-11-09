@@ -12,7 +12,8 @@ use crate::weather::Units;
 
 pub const SCHEMA_VERSION: u8 = 1;
 
-/// The idle screens, in Mode-button order.
+/// The idle screens. The Mode-button order is set by [`IdleMode::next`].
+/// Variant order is part of the stored settings format: only append.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdleMode {
     #[default]
@@ -27,11 +28,11 @@ impl IdleMode {
     /// The screen after this one when Mode is tapped.
     pub fn next(self) -> Self {
         match self {
-            IdleMode::DigitalClock => IdleMode::AnalogClock,
-            IdleMode::AnalogClock => IdleMode::Weather,
+            IdleMode::AnalogClock => IdleMode::DigitalClock,
+            IdleMode::DigitalClock => IdleMode::Weather,
             IdleMode::Weather => IdleMode::ClockWeather,
             IdleMode::ClockWeather => IdleMode::Off,
-            IdleMode::Off => IdleMode::DigitalClock,
+            IdleMode::Off => IdleMode::AnalogClock,
         }
     }
 
@@ -176,18 +177,18 @@ mod tests {
 
     #[test]
     fn idle_mode_cycles_through_all_five() {
-        let mut m = IdleMode::DigitalClock;
+        let mut m = IdleMode::AnalogClock;
         let mut seen = Vec::new();
         for _ in 0..5 {
             seen.push(m);
             m = m.next();
         }
-        assert_eq!(m, IdleMode::DigitalClock);
+        assert_eq!(m, IdleMode::AnalogClock);
         assert_eq!(
             seen,
             [
-                IdleMode::DigitalClock,
                 IdleMode::AnalogClock,
+                IdleMode::DigitalClock,
                 IdleMode::Weather,
                 IdleMode::ClockWeather,
                 IdleMode::Off

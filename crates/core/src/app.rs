@@ -13,7 +13,10 @@ use crate::spotify::Command;
 pub const FEEDBACK_MS: u64 = 500;
 /// How long an error icon stays on screen.
 pub const NOTICE_MS: u64 = 2_000;
-/// How long a Mode tap previews the next idle screen over album art.
+/// How long the mode name and position dots show after a Mode tap.
+pub const MODE_LABEL_MS: u64 = 1_500;
+/// How long a Mode tap previews the next idle screen over album art,
+/// after the mode name.
 pub const PREVIEW_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,9 +74,12 @@ pub enum Screen {
     SignInNeeded,
 }
 
-/// Small icons drawn over the current screen for a moment.
+/// Shown over the current screen for a moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Notice {
+    /// The idle mode's name and its position in the cycle. Covers the
+    /// whole screen.
+    Mode(IdleMode),
     Play,
     Pause,
     Next,
@@ -229,27 +235,38 @@ impl App {
                 } else {
                     (Command::Play, Notice::Play)
                 };
-                self.notice = Some((notice, now + FEEDBACK_MS));
+                self.feedback(notice, now);
                 Some(Action::Spotify(command))
             }
             InputEvent::Tap(Button::Next) => {
-                self.notice = Some((Notice::Next, now + FEEDBACK_MS));
+                self.feedback(Notice::Next, now);
                 Some(Action::Spotify(Command::Next))
             }
             InputEvent::Tap(Button::Previous) => {
-                self.notice = Some((Notice::Previous, now + FEEDBACK_MS));
+                self.feedback(Notice::Previous, now);
                 Some(Action::Spotify(Command::Previous))
             }
             InputEvent::Tap(Button::Mode) => {
                 self.idle_mode = self.idle_mode.next();
+                self.notice = Some((Notice::Mode(self.idle_mode), now + MODE_LABEL_MS));
                 if matches!(self.base_screen(now), Screen::Art { .. }) {
-                    self.preview_until = now + PREVIEW_MS;
+                    self.preview_until = now + MODE_LABEL_MS + PREVIEW_MS;
                 }
                 Some(Action::SaveIdleMode(self.idle_mode))
             }
             InputEvent::OpenPortal => Some(Action::OpenPortal),
             InputEvent::FactoryReset => Some(Action::FactoryReset),
         }
+    }
+
+    /// Show a button icon. While the panel is in Off mode, show the mode
+    /// name instead, so a press makes it clear the device is on.
+    fn feedback(&mut self, notice: Notice, now: u64) {
+        self.notice = Some(if self.base_screen(now) == Screen::Idle(IdleMode::Off) {
+            (Notice::Mode(IdleMode::Off), now + MODE_LABEL_MS)
+        } else {
+            (notice, now + FEEDBACK_MS)
+        });
     }
 
     /// The screen ignoring the Mode preview.
@@ -367,11 +384,11 @@ mod tests {
         let mut app = online(IdleMode::Weather);
         app.handle(track(true), 0);
         app.handle(track(false), 1_000);
-        for t in (6_000..121_000).step_by(5_000) {
+        for t in (6_000..61_000).step_by(5_000) {
             app.handle(track(false), t);
         }
-        assert_eq!(app.view(120_999).screen, DIM);
-        assert_eq!(app.view(121_000).screen, Screen::Idle(IdleMode::Weather));
+        assert_eq!(app.view(60_999).screen, DIM);
+        assert_eq!(app.view(61_000).screen, Screen::Idle(IdleMode::Weather));
     }
 
     #[test]
@@ -381,7 +398,7 @@ mod tests {
         app.handle(Event::Playback(Playback::Nothing), 5_000);
         assert_eq!(app.view(5_000).screen, DIM);
         assert_eq!(
-            app.view(125_000).screen,
+            app.view(65_000).screen,
             Screen::Idle(IdleMode::DigitalClock)
         );
     }
@@ -409,23 +426,45 @@ mod tests {
 
     #[test]
     fn mode_tap_cycles_idle_screen_and_saves() {
-        let mut app = online(IdleMode::DigitalClock);
+        let mut app = online(IdleMode::AnalogClock);
         app.handle(Event::Playback(Playback::Nothing), 0);
         let action = app.handle(tap(Button::Mode), 10);
-        assert_eq!(action, Some(Action::SaveIdleMode(IdleMode::AnalogClock)));
-        assert_eq!(app.view(10).screen, Screen::Idle(IdleMode::AnalogClock));
+        assert_eq!(action, Some(Action::SaveIdleMode(IdleMode::DigitalClock)));
+        assert_eq!(app.view(10).screen, Screen::Idle(IdleMode::DigitalClock));
+        assert_eq!(
+            app.view(10).notice,
+            Some(Notice::Mode(IdleMode::DigitalClock))
+        );
+        assert_eq!(app.view(1_510).notice, None);
+    }
+
+    #[test]
+    fn button_press_while_off_shows_mode_name() {
+        let mut app = online(IdleMode::Off);
+        app.handle(Event::Playback(Playback::Nothing), 0);
+        assert_eq!(
+            app.handle(tap(Button::Next), 10),
+            Some(Action::Spotify(Command::Next))
+        );
+        assert_eq!(app.view(10).notice, Some(Notice::Mode(IdleMode::Off)));
+        assert_eq!(app.view(1_510).notice, None);
+        assert_eq!(app.view(1_510).screen, Screen::Idle(IdleMode::Off));
     }
 
     #[test]
     fn mode_tap_over_art_previews_then_returns() {
-        let mut app = online(IdleMode::DigitalClock);
+        let mut app = online(IdleMode::AnalogClock);
         app.handle(track(true), 0);
         app.handle(tap(Button::Mode), 1_000);
-        assert_eq!(app.view(1_000).screen, Screen::Idle(IdleMode::AnalogClock));
+        assert_eq!(
+            app.view(1_000).notice,
+            Some(Notice::Mode(IdleMode::DigitalClock))
+        );
+        assert_eq!(app.view(3_000).screen, Screen::Idle(IdleMode::DigitalClock));
         // Another tap during the preview moves on and restarts the timer.
-        app.handle(tap(Button::Mode), 2_500);
-        assert_eq!(app.view(4_000).screen, Screen::Idle(IdleMode::Weather));
-        assert_eq!(app.view(4_500).screen, ART);
+        app.handle(tap(Button::Mode), 3_000);
+        assert_eq!(app.view(6_000).screen, Screen::Idle(IdleMode::Weather));
+        assert_eq!(app.view(6_500).screen, ART);
     }
 
     #[test]
@@ -511,7 +550,7 @@ mod tests {
         app.handle(track(true), 0);
         assert_eq!(app.next_change(0), None);
         app.handle(track(false), 1_000);
-        assert_eq!(app.next_change(1_000), Some(121_000));
+        assert_eq!(app.next_change(1_000), Some(61_000));
         app.handle(tap(Button::Next), 2_000);
         assert_eq!(app.next_change(2_000), Some(2_500));
     }

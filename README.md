@@ -25,12 +25,22 @@ Day to day:
 | Command | What it does |
 |---|---|
 | `just test` | Host tests for the shared crates |
-| `just sim` | Desktop panel simulator |
+| `just sim` | Desktop panel simulator with a fake player (options below) |
+| `just snapshots` | Re-render the UI snapshot images after an intended change |
 | `just lint` | rustfmt check + clippy (warnings are errors), host and firmware |
 | `just build` | Build the firmware image |
 | `just flash` | Flash the board and open the serial monitor |
 | `just monitor` | Serial monitor only |
 
+## Simulator
+
+`just sim` opens the 64×64 panel in a window and runs the real app logic and screens. Keys 1–4 are the buttons, and `-` / `+` turn the brightness knob. `just sim --help` lists every key and option.
+
+- Options can also go in a `.env` file: copy [.env.example](.env.example) to `.env` and fill it in. Command-line options override it.
+- `just sim --city Portland` shows real weather from Open-Meteo, and the clock uses the city's timezone.
+- `just sim --live --client-id <id>` follows your real Spotify account. It needs a Spotify developer app set up as in [requirements §10](docs/requirements.md#10-spotify-app-setup-owner-one-time). The first run opens a browser to sign in, and the session is saved to `~/Library/Application Support/on-air-sim/session.json`.
+- Add `--record <folder>` to save the raw Spotify responses, for use as test fixtures (scrub them first).
+
 ## Status
 
-P0 (scaffolding) done. The host crates test, the simulator shows a test pattern, and the firmware builds. Next is P1, core logic on the host.
+P0–P2 done: scaffolding, core logic, screens and the simulator. Next is P3, panel bring-up on real hardware.

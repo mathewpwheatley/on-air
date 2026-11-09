@@ -12,9 +12,13 @@ _default:
 test:
     cargo test --workspace
 
-# Open the desktop panel simulator
-sim:
-    cargo run -p on-air-sim
+# Open the desktop panel simulator. Pass options after, e.g. `just sim --live --city Portland`
+sim *ARGS:
+    cargo run -p on-air-sim -- {{ARGS}}
+
+# Re-render the UI snapshot images after an intended change
+snapshots:
+    UPDATE_SNAPSHOTS=1 cargo test -p on-air-ui --test snapshots
 
 # Format all code
 fmt:

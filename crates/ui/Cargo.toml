@@ -9,3 +9,10 @@ publish.workspace = true
 [dependencies]
 on-air-core.workspace = true
 embedded-graphics.workspace = true
+libm.workspace = true
+qrcodegen-no-heap = "1.8"
+tinybmp = "0.7"
+u8g2-fonts = { version = "0.8", features = ["embedded_graphics_textstyle"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

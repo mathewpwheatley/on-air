@@ -1,16 +1,79 @@
 //! On Air screens.
 //!
 //! Every screen draws onto any `DrawTarget<Color = Rgb888>`, so the same code
-//! runs in the desktop simulator and on the panel.
+//! runs in the desktop simulator and on the panel. [`draw`] renders a whole
+//! [`Scene`]; the firmware and simulator build the scene from the app state.
 
 #![cfg_attr(not(test), no_std)]
 
+mod framebuffer;
+mod icons;
+mod screens;
+mod text;
+
 use embedded_graphics::{pixelcolor::Rgb888, prelude::*, primitives::Rectangle};
+use on_air_core::app::{Screen, View};
+use on_air_core::timezone::DateTime;
+use on_air_core::weather::{Reading, Units};
+
+pub use framebuffer::Framebuffer;
 
 /// Panel width in pixels.
 pub const WIDTH: u32 = 64;
 /// Panel height in pixels.
 pub const HEIGHT: u32 = 64;
+
+/// Everything needed to draw one frame.
+#[derive(Debug, Clone, Copy)]
+pub struct Scene<'a> {
+    pub view: View,
+    /// The current cover, 64×64 RGB888.
+    pub art: Option<&'a [u8]>,
+    /// Local time. `None` until the clock has synced, which shows `--:--`.
+    pub time: Option<DateTime>,
+    pub clock_24h: bool,
+    pub weather: Option<WeatherInfo>,
+    /// Setup network name, shown on the setup screen.
+    pub setup_network: &'a str,
+    /// Any monotonic clock, for scrolling text and blinking.
+    pub now_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeatherInfo {
+    pub reading: Reading,
+    /// Too old to trust: drawn dimmed with a marker.
+    pub stale: bool,
+    /// The units the reading is in, shown after the temperature.
+    pub units: Units,
+}
+
+/// Draw a whole scene, replacing everything on the target.
+pub fn draw<D>(scene: &Scene, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    target.clear(Rgb888::BLACK)?;
+    match scene.view.screen {
+        Screen::Art { dimmed } => screens::art::draw(scene.art, dimmed, target)?,
+        Screen::Idle(mode) => screens::idle::draw(mode, scene, target)?,
+        Screen::Setup => screens::status::setup(scene.setup_network, scene.now_ms, target)?,
+        Screen::Connecting => screens::status::connecting(scene.now_ms, target)?,
+        Screen::SignInNeeded => screens::status::sign_in_needed(target)?,
+    }
+    if scene.view.no_wifi {
+        // Turn the LEDs behind the badge off so it reads on bright covers.
+        target.fill_solid(
+            &Rectangle::new(Point::new(54, 0), Size::new(10, 10)),
+            Rgb888::BLACK,
+        )?;
+        icons::draw(icons::Icon::NoWifi, Point::new(55, 1), 1, target)?;
+    }
+    if let Some(notice) = scene.view.notice {
+        screens::notice::draw(notice, target)?;
+    }
+    Ok(())
+}
 
 /// Bring-up test pattern: eight vertical color bars over a black-to-white
 /// ramp along the bottom 8 rows. Used in the simulator and for panel bring-up.
@@ -52,52 +115,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::convert::Infallible;
-
-    /// Minimal in-memory 64×64 target for tests.
-    struct Buffer([[Rgb888; WIDTH as usize]; HEIGHT as usize]);
-
-    impl Buffer {
-        fn new() -> Self {
-            Self([[Rgb888::BLACK; WIDTH as usize]; HEIGHT as usize])
-        }
-        fn at(&self, x: usize, y: usize) -> Rgb888 {
-            self.0[y][x]
-        }
-    }
-
-    impl OriginDimensions for Buffer {
-        fn size(&self) -> Size {
-            Size::new(WIDTH, HEIGHT)
-        }
-    }
-
-    impl DrawTarget for Buffer {
-        type Color = Rgb888;
-        type Error = Infallible;
-
-        fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-        where
-            I: IntoIterator<Item = Pixel<Self::Color>>,
-        {
-            for Pixel(p, c) in pixels {
-                if (0..WIDTH as i32).contains(&p.x) && (0..HEIGHT as i32).contains(&p.y) {
-                    self.0[p.y as usize][p.x as usize] = c;
-                }
-            }
-            Ok(())
-        }
-    }
 
     #[test]
     fn test_pattern_bars_and_ramp() {
-        let mut buf = Buffer::new();
-        draw_test_pattern(&mut buf).unwrap();
+        let mut fb = Framebuffer::new();
+        draw_test_pattern(&mut fb).unwrap();
 
-        assert_eq!(buf.at(0, 0), Rgb888::WHITE);
-        assert_eq!(buf.at(40, 10), Rgb888::RED);
-        assert_eq!(buf.at(63, 0), Rgb888::BLACK);
-        assert_eq!(buf.at(0, 63), Rgb888::BLACK);
-        assert_eq!(buf.at(63, 63), Rgb888::WHITE);
+        assert_eq!(fb.pixel(0, 0), Rgb888::WHITE);
+        assert_eq!(fb.pixel(40, 10), Rgb888::RED);
+        assert_eq!(fb.pixel(63, 0), Rgb888::BLACK);
+        assert_eq!(fb.pixel(0, 63), Rgb888::BLACK);
+        assert_eq!(fb.pixel(63, 63), Rgb888::WHITE);
     }
 }

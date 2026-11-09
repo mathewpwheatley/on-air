@@ -10,8 +10,8 @@ publish.workspace = true
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 debouncr = "0.2"
 form_urlencoded = { version = "1.2", default-features = false, features = ["alloc"] }
-jiff = { version = "0.2", default-features = false, features = ["alloc", "tzdb-bundle-always"] }
-libm = "0.2"
+jiff.workspace = true
+libm.workspace = true
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }

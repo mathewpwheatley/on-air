@@ -58,7 +58,7 @@ on-air/
 | `schedule` | Pure functions that return the next poll delay: 5 s playing, 30 s idle, an extra poll at track end from `progress_ms` / `duration_ms`, and `Retry-After`. | S-3, S-4, N-1 |
 | `backoff` | One exponential-backoff type with jitter, shared by WiFi (max 60 s), Spotify and weather (max 15 min). | N-3, W-5 |
 | `weather` | Open-Meteo forecast and geocoding models, WMO code to icon mapping, and the 2 h staleness check. | W-1, W-3, W-4, D-12 |
-| `app` | The main state machine. Takes events (playback update, button, tick, weather, network status) and returns the screen to show. Covers playing, paused, idle and status, the 2 min idle timer, the idle-screen cycle and the mode-tap preview. | D-5–D-7, D-6 diagram |
+| `app` | The main state machine. Takes events (playback update, button, tick, weather, network status) and returns the screen to show. Covers playing, paused, idle and status, the 1 min idle timer, the idle-screen cycle and the mode-tap preview. | D-5–D-7, D-6 diagram |
 | `input` | Button debounce (`debouncr`), tap and hold detection (Mode 5 s, Mode + Play 10 s). Knob smoothing, hysteresis, perceptual curve and the 5% floor. | §3.5, P-6 |
 | `image` | JPEG decode wrapper (`zune-jpeg`), downscale fallback, gamma table, crossfade blend, current estimate and brightness cap. | D-2–D-4, D-8 |
 | `settings` | Settings struct with a schema version, serialized with `postcard`. Handles defaults and migrations. | §6.3 |
@@ -85,7 +85,7 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 | `net/wifi` | WiFi state machine (Connecting, Online, Lost, Portal) on `esp-radio` + `embassy-net`. |
 | `net/http` | One HTTPS client wrapper (`reqwless` + chosen TLS) with pinned root CAs and streamed reads. |
 | `net/sntp` | Time sync at boot and every few hours. |
-| `spotify_task` | Token refresh (proactively at about 55 min), polling on `core::schedule`, art download and decode, playback commands. |
+| `spotify_task` | Token refresh (proactively at about 55 min), polling on `core::schedule` (5 s playing, 30 s idle, 60 s after 30 min idle, and a quick poll after each playback command), art download and decode, playback commands. Waits on the command channel with the poll delay as a timeout, so a button press is handled at once. |
 | `weather_task` | Geocoding once, forecast every 15 min, and only while a weather screen is selected. |
 | `portal/` | Soft AP, captive-portal DNS (`edge-captive`), HTTP server (`picoserve`), form page, paste-back handling. |
 | `storage` | `sequential-storage` on the `settings` partition. Writes only when a value changes, to limit flash wear. |
@@ -171,12 +171,19 @@ Each phase lists its tasks and when it counts as done.
 - Build every screen in §2.2.
 - `tools/sim` shows a 64×64 window, scaled up, using the real `app` state machine:
   - Keys 1–4 are the buttons; holding a key counts as a long press.
-  - The scroll wheel is the knob.
+  - `-` and `+` turn the knob.
 - `--fake` mode plays scripted playback and weather.
 - `--live` mode runs the real PKCE flow on the Mac (a local listener on `127.0.0.1:8888` catches the callback). It then polls Spotify and Open-Meteo with `reqwest`. This proves the OAuth flow and parsing against the real APIs before any hardware.
 - Snapshot tests: render each screen to an in-memory buffer and compare it to a checked-in PNG.
 
 **Done when:** in the simulator, album art follows what's playing on Spotify, the idle screens look readable at 64×64 (R-6), and the snapshots are checked in.
+
+**Notes from doing P2 (2026-11-09):**
+- **Sign-in in `--live`.** Spotify redirects to `127.0.0.1:8888`, which on the Mac is the Mac itself, so a small local server (`tiny_http`) catches the callback. The device still uses paste-back. Both share `core::auth`.
+- **Icons** are 24-bit BMPs in `crates/ui/assets/icons/`, stored top-down. Black is transparent. Edit them in any pixel editor.
+- **Fonts:** `logisoso20`/`logisoso16` digits for the clock and temperature, `5x7` and `4x6` for labels.
+- **Setup QR** encodes `WIFI:S:<network>;;` (open network, version 2, 2 px per module) with the name scrolling below.
+- **Snapshots** live in `crates/ui/tests/snapshots/`. `just snapshots` re-renders them, and every test run writes 8× previews to `target/snapshot-previews/`.
 
 ### P3 — Panel bring-up (M0)
 

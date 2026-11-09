@@ -5,8 +5,16 @@
 pub const POLL_PLAYING_MS: u32 = 5_000;
 /// Poll interval once the panel has gone idle.
 pub const POLL_IDLE_MS: u32 = 30_000;
+/// Poll interval after a long stretch with nothing playing, e.g. overnight.
+pub const POLL_DEEP_IDLE_MS: u32 = 60_000;
 /// How long nothing has to play before the panel goes idle.
-pub const IDLE_AFTER_MS: u64 = 120_000;
+pub const IDLE_AFTER_MS: u64 = 60_000;
+/// How long nothing has to play before polling slows to
+/// [`POLL_DEEP_IDLE_MS`].
+pub const DEEP_IDLE_AFTER_MS: u64 = 30 * 60_000;
+/// After a playback button, poll this soon so the panel catches up. The
+/// short wait gives Spotify time to apply the change.
+pub const POLL_AFTER_COMMAND_MS: u32 = 400;
 /// Poll this long after the current track should end, so the next track has
 /// started by the time we ask.
 pub const TRACK_END_GRACE_MS: u32 = 750;
@@ -39,7 +47,8 @@ pub fn next_poll_ms(state: PollState) -> u32 {
             until_end.clamp(MIN_POLL_MS, POLL_PLAYING_MS)
         }
         PollState::NotPlaying { for_ms } if for_ms < IDLE_AFTER_MS => POLL_PLAYING_MS,
-        PollState::NotPlaying { .. } => POLL_IDLE_MS,
+        PollState::NotPlaying { for_ms } if for_ms < DEEP_IDLE_AFTER_MS => POLL_IDLE_MS,
+        PollState::NotPlaying { .. } => POLL_DEEP_IDLE_MS,
     }
 }
 
@@ -86,12 +95,35 @@ mod tests {
     fn not_playing_slows_down_once_idle() {
         assert_eq!(next_poll_ms(PollState::NotPlaying { for_ms: 0 }), 5_000);
         assert_eq!(
-            next_poll_ms(PollState::NotPlaying { for_ms: 119_999 }),
+            next_poll_ms(PollState::NotPlaying { for_ms: 59_999 }),
             5_000
         );
         assert_eq!(
-            next_poll_ms(PollState::NotPlaying { for_ms: 120_000 }),
+            next_poll_ms(PollState::NotPlaying { for_ms: 60_000 }),
             30_000
+        );
+    }
+
+    #[test]
+    fn long_idle_slows_down_further() {
+        let thirty_minutes = 30 * 60_000;
+        assert_eq!(
+            next_poll_ms(PollState::NotPlaying {
+                for_ms: thirty_minutes - 1
+            }),
+            30_000
+        );
+        assert_eq!(
+            next_poll_ms(PollState::NotPlaying {
+                for_ms: thirty_minutes
+            }),
+            60_000
+        );
+        assert_eq!(
+            next_poll_ms(PollState::NotPlaying {
+                for_ms: 12 * 60 * 60_000
+            }),
+            60_000
         );
     }
 

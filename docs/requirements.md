@@ -44,7 +44,7 @@ On Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 | D-3 | Fetch and decode the 64×64 JPEG that Spotify provides for each album, so no resizing is needed. If no 64 px image exists, downscale the smallest available. |
 | D-4 | Crossfade between covers over about 300 ms. |
 | D-5 | When playback is paused, dim the art to about 40% of the current brightness. |
-| D-6 | Idle screens, cycled with the mode button: **Digital clock**, **Analog clock**, **Weather**, **Clock + weather**, or **Off** (panel dark). Enter the idle screen after nothing has played for a configurable period (default 2 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
+| D-6 | Idle screens, cycled with the mode button: **Analog clock**, **Digital clock**, **Weather**, **Clock + weather**, or **None** (panel dark). Each Mode tap first shows "IDLE MODE", the mode's name and a row of position dots for about 1.5 s. Enter the idle screen after nothing has played for a configurable period (default 1 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
 | D-7 | Status screens: setup instructions plus a WiFi-join QR code, "Connecting…", "Spotify sign-in needed", and a "No WiFi" error icon. |
 | D-8 | Brightness from the knob scales the whole framebuffer. Firmware caps the total estimated current below the power supply's rating (see §5.2). |
 | D-9 | **Clock:** time comes from SNTP in the configured timezone. Digital shows HH:MM (12 h or 24 h, configurable) with the date underneath. Analog shows a round face with hour and minute hands, updated every minute. Before the first SNTP sync, show "--:--" instead of a wrong time. |
@@ -60,8 +60,8 @@ stateDiagram-v2
     Paused: Album art dimmed to about 40%
     Playing --> Paused: pause
     Paused --> Playing: play
-    Playing --> Idle: nothing playing for 2 min
-    Paused --> Idle: nothing played for 2 min
+    Playing --> Idle: nothing playing for 1 min
+    Paused --> Idle: nothing played for 1 min
     Idle --> Playing: playback starts
 
     state Idle {
@@ -70,12 +70,12 @@ stateDiagram-v2
         Analog: Analog clock
         Weather: Weather
         ClockWeather: Clock + weather
-        Off: Off (panel dark)
-        Digital --> Analog: Mode tap
-        Analog --> Weather: Mode tap
+        Off: None (panel dark)
+        Analog --> Digital: Mode tap
+        Digital --> Weather: Mode tap
         Weather --> ClockWeather: Mode tap
         ClockWeather --> Off: Mode tap
-        Off --> Digital: Mode tap
+        Off --> Analog: Mode tap
     }
 ```
 
@@ -85,7 +85,7 @@ stateDiagram-v2
 |---|---|
 | S-1 | Authenticate with OAuth 2.0 Authorization Code + PKCE. The device never stores a client secret. |
 | S-2 | Store the refresh token in flash. Spotify may return a new refresh token on each refresh, so save it whenever it does. |
-| S-3 | Poll `GET /v1/me/player/currently-playing` every 5 s while playing and every 30 s while idle. Also schedule a poll for the moment the current track should end, using `progress_ms` and `duration_ms`. |
+| S-3 | Poll `GET /v1/me/player/currently-playing` every 5 s while playing, every 30 s while idle, and every 60 s after 30 min with nothing playing. Poll again about 0.4 s after any playback button, so the panel catches up right away. Also schedule a poll for the moment the current track should end, using `progress_ms` and `duration_ms`. |
 | S-4 | Handle `204 No Content` (nothing playing), `401` (refresh the token and retry once), and `429` (honour the `Retry-After` header). |
 | S-5 | Re-download art only when the album image URL changes. Cache the last cover in RAM. |
 | S-6 | Buttons call `PUT /me/player/play`, `PUT /me/player/pause`, `POST /me/player/next` and `POST /me/player/previous`. Requires Spotify Premium. Fail gracefully without it. |
@@ -140,7 +140,7 @@ sequenceDiagram
 | Button 1 | GPIO, internal pull-up | Play/Pause |
 | Button 2 | GPIO | Previous |
 | Button 3 | GPIO | Next |
-| Button 4 | GPIO | Mode: tap to cycle the idle screen (digital clock → analog clock → weather → clock + weather → off), hold 5 s for the portal |
+| Button 4 | GPIO | Mode: tap to cycle the idle screen (analog clock → digital clock → weather → clock + weather → none), hold 5 s for the portal |
 
 Buttons are debounced in software (20 ms) and give quick visual feedback on the panel (a small icon for about 500 ms).
 
@@ -150,7 +150,7 @@ Tapping **Mode** while music is playing shows a preview of the next idle screen 
 
 | ID | Requirement |
 |---|---|
-| N-1 | **Latency:** when a track ends on its own, new art shows within 2 s (thanks to the end-of-track poll in S-3). After a skip from another device, new art shows within 7 s. When music starts from idle, art shows within 32 s. |
+| N-1 | **Latency:** when a track ends on its own, new art shows within 2 s (thanks to the end-of-track poll in S-3). After a skip from another device, new art shows within 7 s. When music starts from idle, art shows within 32 s, or within 62 s after 30 min with nothing playing. After a playback button on the device, art updates within about 2 s. |
 | N-2 | **Boot:** from power-on to art in under 10 s on a known network. |
 | N-3 | **Resilience:** reconnect automatically after WiFi drops, DNS failures and Spotify outages, with exponential backoff (max 60 s). No manual reboot should ever be needed. |
 | N-4 | **Watchdog:** a hardware watchdog resets the device if the main loop stalls for more than 30 s. |
