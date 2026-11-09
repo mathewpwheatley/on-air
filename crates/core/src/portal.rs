@@ -1,12 +1,15 @@
 //! The setup portal: the page the owner's phone opens on the setup network,
 //! and the logic behind it.
 //!
-//! The HTTP server differs between the device (`picoserve`) and the
-//! simulator (`tiny_http`), so each host routes requests itself. Everything
-//! else lives here: the page, form checking, the Spotify paste-back sign-in
-//! and the JSON replies.
+//! [`Portal`] handles every request without doing any I/O. The host's web
+//! server (`picoserve` on the device, `tiny_http` in the simulator) passes
+//! each request in and sends back the [`Reply`]. When a request needs the
+//! internet (city search, the Spotify token exchange), [`Portal::handle`]
+//! returns [`Handled::Fetch`]; the host sends that request and passes the
+//! outcome to [`Portal::finish`] for the reply. [`Event`]s tell the host
+//! what to act on: join a network, save settings, restart.
 //!
-//! Routes, the same on every host:
+//! Routes:
 //!
 //! | Request | Reply |
 //! |---|---|
@@ -26,9 +29,11 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use serde::Serialize;
 
-use crate::auth::{self, CallbackError, Pkce};
+use crate::auth::{self, CallbackError, Pkce, TokenError};
+use crate::http::{self, Method, NetworkError, Outcome};
 use crate::settings::{IDLE_AFTER_MIN_RANGE, Settings, WeatherLocation};
 use crate::timezone;
+use crate::weather;
 use crate::weather::{Place, Units};
 
 /// The whole portal page: HTML with inline CSS and JavaScript.
@@ -445,9 +450,512 @@ pub fn authorize_json(url: &str) -> String {
     .unwrap_or_default()
 }
 
+/// A reply for the host's web server to send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reply {
+    /// [`PAGE`], as HTML.
+    Page,
+    Json(String),
+    /// `302` to `/`, for captive-portal probes.
+    Redirect,
+    NotFound,
+}
+
+impl Reply {
+    pub fn status(&self) -> u16 {
+        match self {
+            Reply::Page | Reply::Json(_) => 200,
+            Reply::Redirect => 302,
+            Reply::NotFound => 404,
+        }
+    }
+
+    pub fn content_type(&self) -> &'static str {
+        match self {
+            Reply::Page => "text/html; charset=utf-8",
+            Reply::Json(_) => "application/json",
+            Reply::Redirect | Reply::NotFound => "text/plain",
+        }
+    }
+
+    pub fn body(&self) -> &str {
+        match self {
+            Reply::Page => PAGE,
+            Reply::Json(json) => json,
+            Reply::Redirect => "",
+            Reply::NotFound => "Not found",
+        }
+    }
+}
+
+/// What [`Portal::handle`] needs from the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Handled {
+    Reply(Reply),
+    /// Send this request, then pass the outcome to [`Portal::finish`] for
+    /// the reply.
+    Fetch(http::Request),
+}
+
+/// Something the host has to act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// Start joining this network, then report back with [`Portal::set_wifi`].
+    JoinWifi { ssid: String, password: String },
+    /// Spotify sign-in finished; the Client ID and refresh token are in
+    /// [`Portal::settings`]. Save them.
+    SignedIn,
+    /// Clock and weather settings changed. Save and apply them.
+    SettingsChanged,
+    /// The owner pressed Finish setup. Save everything and restart.
+    Done,
+}
+
+enum Pending {
+    Places,
+    TokenExchange(SignIn),
+}
+
+/// The setup portal's state: settings being edited, WiFi progress and any
+/// Spotify sign-in in progress.
+pub struct Portal {
+    settings: Settings,
+    network_name: String,
+    wifi: WifiState,
+    networks: Vec<Network>,
+    sign_in: Option<SignIn>,
+    pending: Option<Pending>,
+}
+
+impl Portal {
+    pub fn new(settings: Settings, network_name: &str) -> Self {
+        Self {
+            settings,
+            network_name: network_name.into(),
+            wifi: WifiState::NotSet,
+            networks: Vec::new(),
+            sign_in: None,
+            pending: None,
+        }
+    }
+
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    /// Networks from the latest WiFi scan, for the network list.
+    pub fn set_networks(&mut self, networks: Vec<Network>) {
+        self.networks = networks;
+    }
+
+    /// Progress joining the home WiFi.
+    pub fn set_wifi(&mut self, state: WifiState) {
+        self.wifi = state;
+    }
+
+    /// Handle one request. `target` is the path with any query string.
+    /// `random` fills a buffer from the hardware random number generator.
+    pub fn handle(
+        &mut self,
+        method: Method,
+        target: &str,
+        body: &str,
+        random: &mut impl FnMut(&mut [u8]),
+        events: &mut impl FnMut(Event),
+    ) -> Handled {
+        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+        let json = |s: String| Handled::Reply(Reply::Json(s));
+        match (method, path) {
+            (Method::Get, "/") => Handled::Reply(Reply::Page),
+            (Method::Get, p) if is_captive_probe(p) => Handled::Reply(Reply::Redirect),
+            (Method::Get, "/api/status") => {
+                json(Status::new(&self.settings, &self.network_name, self.wifi).to_json())
+            }
+            (Method::Get, "/api/networks") => json(networks_json(&self.networks)),
+            (Method::Get, "/api/places") => {
+                let city = form_fields(query).remove("q").unwrap_or_default();
+                if city.is_empty() {
+                    return json(String::from("[]"));
+                }
+                self.pending = Some(Pending::Places);
+                Handled::Fetch(http::Request::get(weather::geocoding_url(&city, 5)))
+            }
+            (Method::Post, "/api/wifi") => match parse_wifi(body) {
+                Ok(form) => {
+                    self.settings.wifi_ssid = form.ssid.clone();
+                    self.settings.wifi_pass = form.password.clone();
+                    self.wifi = WifiState::Connecting;
+                    events(Event::JoinWifi {
+                        ssid: form.ssid,
+                        password: form.password,
+                    });
+                    json(ok_json())
+                }
+                Err(errors) => json(errors_json(&errors)),
+            },
+            (Method::Post, "/api/spotify/start") => {
+                let client_id = form_fields(body).remove("client_id").unwrap_or_default();
+                let mut random_bytes = [0u8; 48];
+                random(&mut random_bytes);
+                let (verifier_random, state_random) = random_bytes.split_at(32);
+                let verifier_random: [u8; 32] = verifier_random.try_into().unwrap_or([0; 32]);
+                let state_random: [u8; 16] = state_random.try_into().unwrap_or([0; 16]);
+                match SignIn::new(&client_id, &verifier_random, &state_random) {
+                    Ok(sign_in) => {
+                        let url = sign_in.authorize_url();
+                        self.sign_in = Some(sign_in);
+                        json(authorize_json(&url))
+                    }
+                    Err(errors) => json(errors_json(&errors)),
+                }
+            }
+            (Method::Post, "/api/spotify/finish") => {
+                let pasted = form_fields(body).remove("callback_url").unwrap_or_default();
+                let Some(sign_in) = self.sign_in.clone() else {
+                    return json(message_json("Tap Connect Spotify first."));
+                };
+                match sign_in.code_from(&pasted) {
+                    Ok(code) => {
+                        let request = http::Request {
+                            method: Method::Post,
+                            url: auth::TOKEN_URL.into(),
+                            bearer: None,
+                            form_body: Some(sign_in.exchange_body(&code)),
+                        };
+                        self.pending = Some(Pending::TokenExchange(sign_in));
+                        Handled::Fetch(request)
+                    }
+                    Err(e) => json(message_json(callback_message(&e))),
+                }
+            }
+            (Method::Post, "/api/display") => match parse_display(body) {
+                Ok(form) => {
+                    form.apply(&mut self.settings);
+                    events(Event::SettingsChanged);
+                    json(ok_json())
+                }
+                Err(errors) => json(errors_json(&errors)),
+            },
+            (Method::Post, "/api/done") => {
+                if self.wifi != WifiState::Connected {
+                    return json(message_json("Connect to your WiFi first (step 1)."));
+                }
+                match missing_before_done(&self.settings) {
+                    Some(message) => json(message_json(message)),
+                    None => {
+                        events(Event::Done);
+                        json(ok_json())
+                    }
+                }
+            }
+            _ => Handled::Reply(Reply::NotFound),
+        }
+    }
+
+    /// The reply for a request that needed a [`Handled::Fetch`].
+    pub fn finish(&mut self, outcome: Outcome, events: &mut impl FnMut(Event)) -> Reply {
+        let reply = match self.pending.take() {
+            Some(Pending::Places) => match outcome {
+                Ok(r) if r.status == 200 => match weather::parse_geocoding(&r.body) {
+                    Ok(places) => places_json(&places),
+                    Err(_) => message_json("Couldn't search for cities right now. Try again."),
+                },
+                _ => message_json("Couldn't search for cities right now. Try again."),
+            },
+            Some(Pending::TokenExchange(sign_in)) => self.finish_sign_in(sign_in, outcome, events),
+            None => message_json("Something went wrong. Try again."),
+        };
+        Reply::Json(reply)
+    }
+
+    fn finish_sign_in(
+        &mut self,
+        sign_in: SignIn,
+        outcome: Outcome,
+        events: &mut impl FnMut(Event),
+    ) -> String {
+        let response = match outcome {
+            Ok(response) => response,
+            Err(NetworkError) => {
+                return message_json("Couldn't reach Spotify. Check the WiFi and try again.");
+            }
+        };
+        match auth::parse_token_response(response.status, &response.body) {
+            Ok(tokens) => match tokens.refresh_token {
+                Some(refresh_token) => {
+                    self.settings.spotify_client_id = sign_in.client_id;
+                    self.settings.spotify_refresh_token = Some(refresh_token);
+                    self.sign_in = None;
+                    events(Event::SignedIn);
+                    ok_json()
+                }
+                None => message_json(
+                    "Spotify didn't send everything needed. Tap Connect Spotify to try again.",
+                ),
+            },
+            Err(TokenError::InvalidGrant) => message_json(
+                "That sign-in has expired or was already used. Tap Connect Spotify to try again.",
+            ),
+            Err(TokenError::InvalidClient) => message_json(
+                "Spotify doesn't recognise that Client ID. Check it in your Spotify app's settings.",
+            ),
+            Err(_) => message_json("Spotify sign-in failed. Tap Connect Spotify to try again."),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::Response;
+
+    fn random(buffer: &mut [u8]) {
+        buffer.fill(7);
+    }
+
+    /// Run one request through the portal, answering any fetch with `fetched`.
+    fn request(
+        portal: &mut Portal,
+        method: Method,
+        target: &str,
+        body: &str,
+        fetched: Option<Outcome>,
+        events: &mut Vec<Event>,
+    ) -> Reply {
+        let mut push = |e| events.push(e);
+        match portal.handle(method, target, body, &mut random, &mut push) {
+            Handled::Reply(reply) => reply,
+            Handled::Fetch(_) => portal.finish(fetched.expect("a fetch outcome"), &mut push),
+        }
+    }
+
+    #[test]
+    fn full_setup_flow() {
+        let mut portal = Portal::new(Settings::default(), "OnAir-Setup-1A2B");
+        let mut events = Vec::new();
+
+        assert_eq!(
+            request(&mut portal, Method::Get, "/", "", None, &mut events),
+            Reply::Page
+        );
+        assert_eq!(
+            request(
+                &mut portal,
+                Method::Get,
+                "/hotspot-detect.html",
+                "",
+                None,
+                &mut events
+            ),
+            Reply::Redirect
+        );
+
+        // WiFi.
+        let reply = request(
+            &mut portal,
+            Method::Post,
+            "/api/wifi",
+            "ssid=Home&password=hunter22",
+            None,
+            &mut events,
+        );
+        assert_eq!(reply, Reply::Json(ok_json()));
+        assert_eq!(
+            events,
+            [Event::JoinWifi {
+                ssid: "Home".into(),
+                password: "hunter22".into()
+            }]
+        );
+        portal.set_wifi(WifiState::Connected);
+
+        // Spotify: start, then paste back.
+        let Reply::Json(start) = request(
+            &mut portal,
+            Method::Post,
+            "/api/spotify/start",
+            "client_id=0123456789abcdef0123456789abcdef",
+            None,
+            &mut events,
+        ) else {
+            panic!()
+        };
+        let state = start
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .trim_end_matches("\"}");
+        let callback = alloc::format!(
+            "callback_url=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback%3Fcode%3Dabc%26state%3D{state}"
+        );
+        let mut handled = Vec::new();
+        match portal.handle(
+            Method::Post,
+            "/api/spotify/finish",
+            &callback,
+            &mut random,
+            &mut |e| handled.push(e),
+        ) {
+            Handled::Fetch(token_request) => {
+                assert_eq!(token_request.url, auth::TOKEN_URL);
+                assert!(token_request.form_body.unwrap().contains("code=abc"));
+            }
+            other => panic!("{other:?}"),
+        }
+        let token_ok = include_bytes!("../tests/fixtures/spotify_token_ok.json");
+        let reply = portal.finish(Ok(Response::new(200, &token_ok[..])), &mut |e| {
+            events.push(e)
+        });
+        assert_eq!(reply, Reply::Json(ok_json()));
+        assert_eq!(
+            portal.settings().spotify_refresh_token.as_deref(),
+            Some("AQC-new-refresh-token")
+        );
+
+        // Finish is refused until there's a city.
+        let Reply::Json(refused) = request(
+            &mut portal,
+            Method::Post,
+            "/api/done",
+            "",
+            None,
+            &mut events,
+        ) else {
+            panic!()
+        };
+        assert!(refused.contains("city"));
+
+        // City search goes out to the network.
+        let geocode = include_bytes!("../tests/fixtures/openmeteo_geocode_portland.json");
+        let Reply::Json(places) = request(
+            &mut portal,
+            Method::Get,
+            "/api/places?q=Portland",
+            "",
+            Some(Ok(Response::new(200, &geocode[..]))),
+            &mut events,
+        ) else {
+            panic!()
+        };
+        assert!(places.contains("Portland, Oregon"));
+
+        let display = "place=set&city=Portland&lat=45.52&lon=-122.68&timezone=America%2FLos_Angeles&units=f&clock=12&idle_minutes=5";
+        request(
+            &mut portal,
+            Method::Post,
+            "/api/display",
+            display,
+            None,
+            &mut events,
+        );
+        assert_eq!(
+            request(
+                &mut portal,
+                Method::Post,
+                "/api/done",
+                "",
+                None,
+                &mut events
+            ),
+            Reply::Json(ok_json())
+        );
+        assert_eq!(
+            events,
+            [
+                Event::JoinWifi {
+                    ssid: "Home".into(),
+                    password: "hunter22".into()
+                },
+                Event::SignedIn,
+                Event::SettingsChanged,
+                Event::Done
+            ]
+        );
+    }
+
+    #[test]
+    fn done_needs_a_connected_wifi() {
+        let settings = Settings {
+            wifi_ssid: "Home".into(),
+            spotify_client_id: "cid".into(),
+            spotify_refresh_token: Some("rt".into()),
+            weather: Some(WeatherLocation {
+                city: "X".into(),
+                lat: 0.0,
+                lon: 0.0,
+            }),
+            ..Settings::default()
+        };
+        let mut portal = Portal::new(settings, "n");
+        let mut events = Vec::new();
+        portal.set_wifi(WifiState::Failed);
+        let Reply::Json(refused) = request(
+            &mut portal,
+            Method::Post,
+            "/api/done",
+            "",
+            None,
+            &mut events,
+        ) else {
+            panic!()
+        };
+        assert!(refused.contains("WiFi"));
+        portal.set_wifi(WifiState::Connected);
+        assert_eq!(
+            request(
+                &mut portal,
+                Method::Post,
+                "/api/done",
+                "",
+                None,
+                &mut events
+            ),
+            Reply::Json(ok_json())
+        );
+    }
+
+    #[test]
+    fn failed_fetches_get_friendly_messages() {
+        let mut portal = Portal::new(Settings::default(), "n");
+        let mut events = Vec::new();
+        let Reply::Json(json) = request(
+            &mut portal,
+            Method::Get,
+            "/api/places?q=x",
+            "",
+            Some(Err(NetworkError)),
+            &mut events,
+        ) else {
+            panic!()
+        };
+        assert!(json.contains("Couldn't search"));
+        assert_eq!(
+            request(
+                &mut portal,
+                Method::Get,
+                "/api/places?q=",
+                "",
+                None,
+                &mut events
+            ),
+            Reply::Json("[]".into())
+        );
+        assert_eq!(
+            request(&mut portal, Method::Get, "/nope", "", None, &mut events),
+            Reply::NotFound
+        );
+        let Reply::Json(json) = request(
+            &mut portal,
+            Method::Post,
+            "/api/spotify/finish",
+            "callback_url=x",
+            None,
+            &mut events,
+        ) else {
+            panic!()
+        };
+        assert!(json.contains("Connect Spotify first"));
+    }
 
     #[test]
     fn captive_probes_are_recognised() {

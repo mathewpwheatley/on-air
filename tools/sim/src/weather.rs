@@ -56,7 +56,7 @@ pub fn fake(updates: Sender<Update>) {
 
 /// Look up `city`, then keep its weather coming.
 pub fn run(city: String, units: Units, updates: Sender<Update>, generation: Generation) {
-    let client = reqwest::blocking::Client::new();
+    let client = crate::http_client::client();
     let mut backoff = Backoff::weather();
 
     let place = loop {
@@ -90,7 +90,7 @@ pub fn run(city: String, units: Units, updates: Sender<Update>, generation: Gene
 
 /// Keep the weather for a known location coming, every 15 minutes.
 pub fn run_at(lat: f32, lon: f32, units: Units, updates: Sender<Update>, generation: Generation) {
-    let client = reqwest::blocking::Client::new();
+    let client = crate::http_client::client();
     let mut backoff = Backoff::weather();
     let url = weather::forecast_url(lat, lon, units);
     while generation.is_current() {
@@ -107,12 +107,12 @@ pub fn run_at(lat: f32, lon: f32, units: Units, updates: Sender<Update>, generat
     }
 }
 
+/// GET `url`, returning the body of a 200 reply.
 pub fn get(client: &reqwest::blocking::Client, url: &str) -> Option<Vec<u8>> {
-    let response = client.get(url).send().ok()?;
-    if !response.status().is_success() {
-        return None;
+    match crate::http_client::send(client, &on_air_core::http::Request::get(url)) {
+        Ok(response) if response.status == 200 => Some(response.body),
+        _ => None,
     }
-    response.bytes().ok().map(|b| b.to_vec())
 }
 
 fn sleep_backoff(backoff: &mut Backoff) {

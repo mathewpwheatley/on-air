@@ -11,6 +11,7 @@ extern crate alloc;
 pub mod app;
 pub mod auth;
 pub mod backoff;
+pub mod http;
 pub mod image;
 pub mod input;
 pub mod portal;
@@ -18,6 +19,7 @@ pub mod schedule;
 pub mod settings;
 pub mod setup;
 pub mod spotify;
+pub mod spotify_sync;
 pub mod timezone;
 pub mod weather;
 

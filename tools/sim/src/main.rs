@@ -2,6 +2,7 @@
 //! window, with either a fake player or your real Spotify account.
 
 mod fake;
+mod http_client;
 mod live;
 mod messages;
 mod portal;

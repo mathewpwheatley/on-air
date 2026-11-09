@@ -1,5 +1,6 @@
-//! Real Spotify, using the same sign-in, polling and parsing code as the
-//! device. Only the HTTP client differs.
+//! Real Spotify. The core's `SpotifySync` decides what to do; this thread
+//! only sends its requests and waits. Sign-in happens in the browser, with
+//! a small local server catching Spotify's redirect.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,15 +9,15 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use on_air_core::app::{CommandFailure, NetStatus};
-use on_air_core::auth::{self, Pkce, TokenError, Tokens};
-use on_air_core::backoff::Backoff;
-use on_air_core::image;
-use on_air_core::schedule::{self, FollowUp, PollState};
-use on_air_core::spotify::{self, Command, CommandResult, Method, NowPlaying, PlayerResponse};
-use reqwest::blocking::{Client, Response};
-use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER};
+use on_air_core::auth;
+use on_air_core::http::{Method, Request};
+use on_air_core::portal::SignIn;
+use on_air_core::spotify::{self, PlayerResponse};
+use on_air_core::spotify_sync::{Next, Output, SpotifySync};
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::http_client;
 use crate::messages::{Control, Update};
 
 #[derive(Serialize, Deserialize)]
@@ -52,123 +53,6 @@ pub fn save_refresh_token(client_id: &str, refresh_token: &str) {
     }
 }
 
-enum Failure {
-    /// Network trouble or an outage: retry later.
-    Transient,
-    /// The owner has to sign in again.
-    SignInNeeded,
-}
-
-struct Token {
-    access: String,
-    issued_at: Instant,
-    expires_in_s: u32,
-}
-
-impl Token {
-    fn needs_refresh(&self) -> bool {
-        auth::needs_refresh(self.issued_at.elapsed().as_secs(), 0, self.expires_in_s)
-    }
-}
-
-struct Spotify {
-    http: Client,
-    client_id: String,
-    refresh_token: String,
-    token: Option<Token>,
-}
-
-impl Spotify {
-    fn refresh(&mut self) -> Result<(), Failure> {
-        let response = self
-            .http
-            .post(auth::TOKEN_URL)
-            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(auth::refresh_body(&self.client_id, &self.refresh_token))
-            .send()
-            .map_err(|_| Failure::Transient)?;
-        let (status, _, body) = read(response)?;
-        match auth::parse_token_response(status, &body) {
-            Ok(tokens) => {
-                self.store(tokens);
-                Ok(())
-            }
-            Err(TokenError::InvalidGrant | TokenError::InvalidClient) => Err(Failure::SignInNeeded),
-            Err(e) => {
-                eprintln!("spotify: token refresh failed: {e:?}");
-                Err(Failure::Transient)
-            }
-        }
-    }
-
-    fn store(&mut self, tokens: Tokens) {
-        if let Some(rotated) = tokens.refresh_token {
-            self.refresh_token = rotated;
-            save_refresh_token(&self.client_id, &self.refresh_token);
-        }
-        self.token = Some(Token {
-            access: tokens.access_token,
-            issued_at: Instant::now(),
-            expires_in_s: tokens.expires_in_s,
-        });
-    }
-
-    fn access_token(&mut self) -> Result<String, Failure> {
-        if self.token.as_ref().is_none_or(Token::needs_refresh) {
-            self.refresh()?;
-        }
-        Ok(self.token.as_ref().expect("just refreshed").access.clone())
-    }
-
-    /// GET or send with the access token, refreshing and retrying once on 401.
-    fn authorized(
-        &mut self,
-        build: impl Fn(&Client, &str) -> reqwest::blocking::RequestBuilder,
-    ) -> Result<(u16, Option<String>, Vec<u8>), Failure> {
-        for attempt in 0..2 {
-            let token = self.access_token()?;
-            let response = build(&self.http, &format!("Bearer {token}"))
-                .send()
-                .map_err(|_| Failure::Transient)?;
-            let result = read(response)?;
-            if result.0 == 401 && attempt == 0 {
-                self.token = None;
-                continue;
-            }
-            return Ok(result);
-        }
-        Err(Failure::SignInNeeded)
-    }
-
-    fn command(&mut self, command: Command) -> Result<CommandResult, Failure> {
-        let (method, url) = command.request();
-        let (status, retry_after, _) = self.authorized(|http, bearer| {
-            let request = match method {
-                Method::Put => http.put(url),
-                Method::Post => http.post(url),
-            };
-            request
-                .header(AUTHORIZATION, bearer)
-                .header(CONTENT_LENGTH, "0")
-        })?;
-        Ok(spotify::parse_command_response(
-            status,
-            retry_after.as_deref(),
-        ))
-    }
-}
-
-fn read(response: Response) -> Result<(u16, Option<String>, Vec<u8>), Failure> {
-    let status = response.status().as_u16();
-    let retry_after = response
-        .headers()
-        .get(RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
-    let body = response.bytes().map_err(|_| Failure::Transient)?.to_vec();
-    Ok((status, retry_after, body))
-}
-
 pub fn run(
     client_id: String,
     record: Option<PathBuf>,
@@ -181,11 +65,14 @@ pub fn run(
     {
         eprintln!("couldn't create {}: {e}", dir.display());
     }
-    let http = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .expect("HTTP client");
-    let _ = updates.send(Update::Net(NetStatus::Online));
+    let http = http_client::client();
+    let start = Instant::now();
+    let now = || start.elapsed().as_millis() as u64;
+    let mut recorder = Recorder {
+        dir: record,
+        last_item: None,
+        count: 0,
+    };
     let mut refresh_token = load_refresh_token(&client_id);
 
     loop {
@@ -206,174 +93,85 @@ pub fn run(
                 }
             }
         };
-        let mut spotify = Spotify {
-            http: http.clone(),
-            client_id: client_id.clone(),
-            refresh_token: token,
-            token: None,
-        };
-        match poll(
-            &mut spotify,
-            record.as_deref(),
-            &idle_after_ms,
-            &updates,
-            &controls,
-        ) {
-            Exit::SignInNeeded => {
-                eprintln!("spotify: signed out, starting sign-in again");
-                let _ = std::fs::remove_file(session_path());
-            }
-            Exit::WindowClosed => return,
-        }
-    }
-}
 
-enum Exit {
-    SignInNeeded,
-    WindowClosed,
-}
-
-fn poll(
-    spotify: &mut Spotify,
-    record: Option<&Path>,
-    idle_after_ms: &AtomicU64,
-    updates: &Sender<Update>,
-    controls: &Receiver<Control>,
-) -> Exit {
-    let mut backoff = Backoff::spotify();
-    let mut delay_ms: u32 = 0;
-    let mut sent_art_url: Option<Option<String>> = None;
-    let mut not_playing_since: Option<Instant> = None;
-    let mut recorded_item: Option<String> = None;
-    let mut recorded = 0;
-    // What the last poll found, and quick polling after a button press.
-    let mut latest: Option<NowPlaying> = None;
-    let mut follow_up: Option<FollowUp> = None;
-
-    loop {
-        match controls.recv_timeout(Duration::from_millis(delay_ms as u64)) {
-            Ok(Control::Spotify(command)) => {
-                match spotify.command(command) {
-                    Ok(CommandResult::Ok) => {}
-                    Ok(CommandResult::PremiumRequired) => {
-                        let _ =
-                            updates.send(Update::CommandFailed(CommandFailure::PremiumRequired));
+        let idle = || idle_after_ms.load(Ordering::Relaxed);
+        let mut sync = SpotifySync::new(&client_id, &token, idle(), crate::random_u32());
+        loop {
+            sync.set_idle_after_ms(idle());
+            match sync.next(now()) {
+                Next::Send(request) => {
+                    let outcome = http_client::send(&http, &request);
+                    if request.url == spotify::CURRENTLY_PLAYING_URL
+                        && let Ok(response) = &outcome
+                    {
+                        recorder.save(response.status, &response.body);
                     }
-                    Ok(CommandResult::NoActiveDevice) => {
-                        let _ = updates.send(Update::CommandFailed(CommandFailure::NoActiveDevice));
-                    }
-                    Ok(other) => {
-                        eprintln!("spotify: {command:?} failed: {other:?}");
-                        let _ = updates.send(Update::CommandFailed(CommandFailure::Other));
-                    }
-                    Err(Failure::SignInNeeded) => return Exit::SignInNeeded,
-                    Err(Failure::Transient) => {
-                        let _ = updates.send(Update::CommandFailed(CommandFailure::Other));
-                    }
+                    sync.handle(now(), outcome, &mut |output| {
+                        forward(output, &client_id, &updates)
+                    });
                 }
-                let quick = FollowUp::new(command, latest.as_ref());
-                delay_ms = quick.first_delay_ms();
-                follow_up = Some(quick);
-                continue;
-            }
-            Ok(Control::StopPlayback) | Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return Exit::WindowClosed,
-        }
-
-        let result = spotify.authorized(|http, bearer| {
-            http.get(spotify::CURRENTLY_PLAYING_URL)
-                .header(AUTHORIZATION, bearer)
-        });
-        let (status, retry_after, body) = match result {
-            Ok(r) => r,
-            Err(Failure::SignInNeeded) => return Exit::SignInNeeded,
-            Err(Failure::Transient) => {
-                let _ = updates.send(Update::Net(NetStatus::Lost));
-                delay_ms = backoff.next_delay_ms(crate::random_u32());
-                continue;
-            }
-        };
-        let _ = updates.send(Update::Net(NetStatus::Online));
-
-        let state = match spotify::parse_player_response(status, retry_after.as_deref(), &body) {
-            PlayerResponse::Playing(now_playing) => {
-                backoff.reset();
-                if let Some(dir) = record
-                    && recorded_item.as_deref() != Some(now_playing.item_id.as_str())
-                {
-                    recorded += 1;
-                    let path = dir.join(format!("spotify_recorded_{recorded}.json"));
-                    match std::fs::write(&path, &body) {
-                        Ok(()) => println!("recorded {}", path.display()),
-                        Err(e) => eprintln!("couldn't record {}: {e}", path.display()),
-                    }
-                    recorded_item = Some(now_playing.item_id.clone());
+                Next::Wait(ms) => match controls.recv_timeout(Duration::from_millis(ms)) {
+                    Ok(Control::Spotify(command)) => sync.command(command),
+                    Ok(Control::StopPlayback) | Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => return,
+                },
+                Next::Stopped => {
+                    eprintln!("spotify: signed out, starting sign-in again");
+                    let _ = std::fs::remove_file(session_path());
+                    break;
                 }
-                if sent_art_url.as_ref() != Some(&now_playing.art_url) {
-                    let art = now_playing
-                        .art_url
-                        .as_deref()
-                        .and_then(|url| download_art(&spotify.http, url));
-                    let _ = updates.send(Update::Art(art));
-                    sent_art_url = Some(now_playing.art_url.clone());
-                }
-                let state = if now_playing.is_playing {
-                    not_playing_since = None;
-                    PollState::Playing {
-                        progress_ms: now_playing.progress_ms,
-                        duration_ms: now_playing.duration_ms,
-                    }
-                } else {
-                    let since = *not_playing_since.get_or_insert_with(Instant::now);
-                    PollState::NotPlaying {
-                        for_ms: since.elapsed().as_millis() as u64,
-                    }
-                };
-                latest = Some(now_playing.clone());
-                let _ = updates.send(Update::NowPlaying(Some(now_playing)));
-                state
-            }
-            PlayerResponse::Nothing => {
-                backoff.reset();
-                latest = None;
-                let _ = updates.send(Update::NowPlaying(None));
-                let since = *not_playing_since.get_or_insert_with(Instant::now);
-                PollState::NotPlaying {
-                    for_ms: since.elapsed().as_millis() as u64,
-                }
-            }
-            PlayerResponse::Unauthorized => return Exit::SignInNeeded,
-            PlayerResponse::RateLimited { retry_after_s } => {
-                eprintln!("spotify: rate limited for {retry_after_s} s");
-                delay_ms = schedule::respect_retry_after(0, Some(retry_after_s));
-                continue;
-            }
-            PlayerResponse::Failed { status } => {
-                delay_ms = backoff.next_delay_ms(crate::random_u32());
-                eprintln!(
-                    "spotify: currently-playing returned {status}, retrying in {} s",
-                    delay_ms / 1000
-                );
-                continue;
-            }
-        };
-        delay_ms = schedule::next_poll_ms(state, idle_after_ms.load(Ordering::Relaxed));
-        if let Some(quick) = &mut follow_up {
-            match quick.after_poll(latest.as_ref()) {
-                Some(quick_ms) => delay_ms = delay_ms.min(quick_ms),
-                None => follow_up = None,
             }
         }
     }
 }
 
-fn download_art(http: &Client, url: &str) -> Option<Vec<u8>> {
-    let bytes = http.get(url).send().ok()?.bytes().ok()?;
-    match image::decode_art(&bytes) {
-        Ok(frame) => Some(frame),
-        Err(e) => {
-            eprintln!("spotify: couldn't decode cover {url}: {e:?}");
-            None
+/// Pass what changed on to the window.
+fn forward(output: Output, client_id: &str, updates: &Sender<Update>) {
+    let update = match output {
+        Output::NowPlaying(now_playing) => Update::NowPlaying(now_playing),
+        Output::Art(cover) => Update::Art(cover),
+        Output::CommandFailed(failure) => {
+            if failure == CommandFailure::Other {
+                eprintln!("spotify: a playback command failed");
+            }
+            Update::CommandFailed(failure)
+        }
+        Output::RefreshTokenChanged(token) => {
+            save_refresh_token(client_id, &token);
+            return;
+        }
+        Output::Online => Update::Net(NetStatus::Online),
+        Output::Offline => Update::Net(NetStatus::Lost),
+        Output::SignInNeeded => Update::SignInNeeded,
+    };
+    let _ = updates.send(update);
+}
+
+/// Saves each new currently-playing response, for test fixtures.
+struct Recorder {
+    dir: Option<PathBuf>,
+    last_item: Option<String>,
+    count: u32,
+}
+
+impl Recorder {
+    fn save(&mut self, status: u16, body: &[u8]) {
+        let Some(dir) = &self.dir else { return };
+        let PlayerResponse::Playing(now_playing) =
+            spotify::parse_player_response(status, None, body)
+        else {
+            return;
+        };
+        if self.last_item.as_deref() == Some(now_playing.item_id.as_str()) {
+            return;
+        }
+        self.count += 1;
+        self.last_item = Some(now_playing.item_id);
+        let path: &Path = dir;
+        let path = path.join(format!("spotify_recorded_{}.json", self.count));
+        match std::fs::write(&path, body) {
+            Ok(()) => println!("recorded {}", path.display()),
+            Err(e) => eprintln!("couldn't record {}: {e}", path.display()),
         }
     }
 }
@@ -381,16 +179,16 @@ fn download_art(http: &Client, url: &str) -> Option<Vec<u8>> {
 /// Browser sign-in. Spotify redirects to 127.0.0.1:8888 on this computer,
 /// so a tiny local server catches the callback instead of pasting it back.
 fn sign_in(http: &Client, client_id: &str) -> Result<String, String> {
-    let mut random = [0u8; 32];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-    let pkce = Pkce::from_random(&random);
-    let mut state_bytes = [0u8; 16];
-    getrandom::fill(&mut state_bytes).map_err(|e| e.to_string())?;
-    let state = auth::state_from_random(&state_bytes);
+    let mut verifier_random = [0u8; 32];
+    let mut state_random = [0u8; 16];
+    getrandom::fill(&mut verifier_random).map_err(|e| e.to_string())?;
+    getrandom::fill(&mut state_random).map_err(|e| e.to_string())?;
+    let sign_in = SignIn::new(client_id, &verifier_random, &state_random)
+        .map_err(|_| "that Client ID doesn't look right".to_string())?;
 
     let server = tiny_http::Server::http("127.0.0.1:8888")
         .map_err(|e| format!("can't listen on 127.0.0.1:8888: {e}"))?;
-    let url = auth::authorize_url(client_id, &pkce.challenge, &state);
+    let url = sign_in.authorize_url();
     println!("Sign in to Spotify in your browser. If it doesn't open, visit:\n{url}");
     let _ = open::that(&url);
 
@@ -401,7 +199,7 @@ fn sign_in(http: &Client, client_id: &str) -> Result<String, String> {
                 .respond(tiny_http::Response::from_string("Not found").with_status_code(404));
             continue;
         }
-        match auth::parse_callback(request.url(), &state) {
+        match sign_in.code_from(request.url()) {
             Ok(code) => {
                 let _ = request.respond(tiny_http::Response::from_string(
                     "Signed in to On-Air. You can close this tab.",
@@ -418,15 +216,16 @@ fn sign_in(http: &Client, client_id: &str) -> Result<String, String> {
         }
     };
 
-    let response = http
-        .post(auth::TOKEN_URL)
-        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(auth::code_exchange_body(client_id, &code, &pkce.verifier))
-        .send()
-        .map_err(|e| e.to_string())?;
-    let status = response.status().as_u16();
-    let body = response.bytes().map_err(|e| e.to_string())?;
-    let tokens = auth::parse_token_response(status, &body).map_err(|e| format!("{e:?}"))?;
+    let request = Request {
+        method: Method::Post,
+        url: auth::TOKEN_URL.into(),
+        bearer: None,
+        form_body: Some(sign_in.exchange_body(&code)),
+    };
+    let response =
+        http_client::send(http, &request).map_err(|_| "couldn't reach Spotify".to_string())?;
+    let tokens = auth::parse_token_response(response.status, &response.body)
+        .map_err(|e| format!("{e:?}"))?;
     let refresh_token = tokens
         .refresh_token
         .ok_or("Spotify didn't return a refresh token")?;

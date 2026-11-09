@@ -5,6 +5,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::Deserialize;
 
+pub use crate::http::Method;
+
 /// `market=from_token` drops the long `available_markets` lists, which keeps
 /// responses small. `additional_types=episode` includes podcasts.
 pub const CURRENTLY_PLAYING_URL: &str = "https://api.spotify.com/v1/me/player/currently-playing?market=from_token&additional_types=episode";
@@ -202,12 +204,6 @@ pub enum Command {
     Pause,
     Next,
     Previous,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Method {
-    Put,
-    Post,
 }
 
 impl Command {

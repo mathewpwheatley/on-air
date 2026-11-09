@@ -55,12 +55,15 @@ on-air/
 |---|---|---|
 | `auth` | PKCE verifier and challenge (SHA-256 + base64url), authorize-URL builder, callback-URL parser that pulls out `code`, token-response parsing. | S-1, S-7, P-4 |
 | `spotify` | `currently-playing` response model for tracks and podcast episodes. Picks the 64 px image (D-3). Maps status codes to outcomes: 200, 204, 401, 403 (no Premium), 429 with `Retry-After`. | S-3–S-6 |
+| `http` | Plain request and reply types, so core logic can ask for HTTP without doing it. Each host sends them with its own client. | — |
+| `spotify_sync` | The Spotify loop without the network: says which request to send next (token refresh, poll, playback command, cover download), reads each reply and reports what changed. Handles 401, 429, outages, rotated refresh tokens and quick polls after a button. | S-1–S-6 |
 | `schedule` | Pure functions that return the next poll delay: 5 s playing, 30 s idle, an extra poll at track end from `progress_ms` / `duration_ms`, and `Retry-After`. | S-3, S-4, N-1 |
 | `backoff` | One exponential-backoff type with jitter, shared by WiFi (max 60 s), Spotify and weather (max 15 min). | N-3, W-5 |
 | `weather` | Open-Meteo forecast and geocoding models, WMO code to icon mapping, and the 2 h staleness check. | W-1, W-3, W-4, D-12 |
 | `app` | The main state machine. Takes events (playback update, button, tick, weather, network status) and returns the screen to show. Covers playing, paused, idle and status, the idle timer (owner setting, default 5 min), the idle-screen cycle and the mode-tap preview. | D-5–D-7, D-6 diagram |
 | `input` | Button debounce (`debouncr`), tap and hold detection (Mode 5 s, Mode + Play 10 s). Knob smoothing, hysteresis, perceptual curve and the 5% floor. | §3.5, P-6 |
 | `image` | JPEG decode wrapper (`zune-jpeg`), downscale fallback, gamma table, crossfade blend, current estimate and brightness cap. | D-2–D-4, D-8 |
+| `portal` | The setup page and `Portal`, which handles every portal request without I/O, asking the host to fetch only for city search and the token exchange. | P-1–P-7 |
 | `settings` | Settings struct with a schema version, serialized with `postcard`. Handles defaults and migrations. | §6.3 |
 | `timezone` | Thin wrapper over `jiff` with its bundled IANA database (about 230 KB of flash). Converts UTC to local time for zones named like `America/Los_Angeles`. | D-9 |
 
@@ -85,9 +88,9 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 | `net/wifi` | WiFi state machine (Connecting, Online, Lost, Portal) on `esp-radio` + `embassy-net`. |
 | `net/http` | One HTTPS client wrapper (`reqwless` + chosen TLS) with pinned root CAs and streamed reads. |
 | `net/sntp` | Time sync at boot and every few hours. |
-| `spotify_task` | Token refresh (proactively at about 55 min), polling on `core::schedule` (5 s playing, 30 s idle, 60 s after 30 min idle, and quick polls after each playback command until Spotify shows the change, via `core::schedule::FollowUp`), art download and decode, playback commands. Waits on the command channel with the poll delay as a timeout, so a button press is handled at once. |
+| `spotify_task` | Runs `core::spotify_sync::SpotifySync`: sends each request it asks for with `reqwless`, waits on the command channel between polls, and saves rotated refresh tokens to `storage`. |
 | `weather_task` | Geocoding once, forecast every 15 min, and only while a weather screen is selected. |
-| `portal/` | Soft AP, captive-portal DNS (`edge-captive`), HTTP server (`picoserve`), form page, paste-back handling. |
+| `portal/` | Soft AP, captive-portal DNS (`edge-captive`), and a `picoserve` server that passes each request to `core::portal::Portal` and acts on its events (join WiFi, save, restart). |
 | `storage` | `sequential-storage` on the `settings` partition. Writes only when a value changes, to limit flash wear. |
 | `supervisor` | Every task reports a heartbeat. The supervisor feeds the hardware watchdog only while all heartbeats are fresh, so one stuck task still triggers a reset. |
 
