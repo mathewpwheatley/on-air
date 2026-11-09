@@ -18,6 +18,9 @@ pub const MEDIUM: FontRenderer =
 /// Labels and the date.
 pub const SMALL: FontRenderer =
     FontRenderer::new::<fonts::u8g2_font_5x7_tr>().with_ignore_unknown_chars(true);
+/// Song titles and names. Covers Latin-1, so accented letters show.
+pub const TRACK: FontRenderer =
+    FontRenderer::new::<fonts::u8g2_font_5x7_tf>().with_ignore_unknown_chars(true);
 /// Notices.
 pub const TINY: FontRenderer =
     FontRenderer::new::<fonts::u8g2_font_4x6_tr>().with_ignore_unknown_chars(true);

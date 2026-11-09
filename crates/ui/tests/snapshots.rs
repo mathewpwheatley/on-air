@@ -10,7 +10,7 @@ use on_air_core::app::{Notice, Screen, View};
 use on_air_core::settings::IdleMode;
 use on_air_core::timezone;
 use on_air_core::weather::{Icon, Reading, Units};
-use on_air_ui::{Framebuffer, Scene, WeatherInfo, draw};
+use on_air_ui::{Framebuffer, Scene, Track, WeatherInfo, draw};
 
 /// 2026-11-08 13:30:00 UTC, a Sunday.
 const UNIX_S: i64 = 1_794_144_600;
@@ -19,6 +19,7 @@ fn view(screen: Screen) -> View {
     View {
         screen,
         notice: None,
+        notice_age_ms: 0,
         no_wifi: false,
     }
 }
@@ -44,6 +45,11 @@ fn base<'a>(screen: Screen) -> Scene<'a> {
             reading: reading(Icon::Cloud),
             stale: false,
             units: Units::Celsius,
+        }),
+        track: Some(Track {
+            title: "Mr. Brightside",
+            artist: "The Killers",
+            album: Some("Hot Fuss"),
         }),
         setup_network: "OnAir-Setup-1A2B",
         now_ms: 0,
@@ -222,6 +228,36 @@ fn mode_labels() {
         s.view.notice = Some(Notice::Mode(mode));
         check(&format!("mode_{mode:?}").to_lowercase(), &s);
     }
+}
+
+#[test]
+fn track_info() {
+    let art = test_art();
+    let mut s = base(Screen::Art { dimmed: false });
+    s.art = Some(&art);
+    s.view.notice = Some(Notice::TrackInfo);
+    check("track_info", &s);
+
+    s.track = Some(Track {
+        title: "Bohemian Rhapsody - Remastered 2011",
+        artist: "Queen",
+        album: Some("A Night at the Opera (2011 Remaster)"),
+    });
+    check("track_info_long_start", &s);
+    s.view.notice_age_ms = 3_000;
+    check("track_info_long_scrolled", &s);
+
+    s.track = Some(Track {
+        title: "Episode 42",
+        artist: "A Podcast",
+        album: None,
+    });
+    s.view.notice_age_ms = 0;
+    check("track_info_podcast", &s);
+
+    s.track = None;
+    s.view.screen = Screen::Idle(IdleMode::DigitalClock);
+    check("track_info_nothing", &s);
 }
 
 #[test]

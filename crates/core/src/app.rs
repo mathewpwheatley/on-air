@@ -13,6 +13,8 @@ use crate::spotify::Command;
 pub const FEEDBACK_MS: u64 = 500;
 /// How long an error icon stays on screen.
 pub const NOTICE_MS: u64 = 2_000;
+/// How long the song title, artist and album show.
+pub const TRACK_INFO_MS: u64 = 5_000;
 /// How long the mode name and position dots show after a Mode tap.
 pub const MODE_LABEL_MS: u64 = 1_500;
 /// How long a Mode tap previews the next idle screen over album art,
@@ -54,6 +56,8 @@ pub enum Event {
     SignedIn,
     Input(InputEvent),
     CommandFailed(CommandFailure),
+    /// A different song or episode started playing.
+    TrackStarted,
 }
 
 /// Something for another task to do.
@@ -80,6 +84,9 @@ pub enum Notice {
     /// The idle mode's name and its position in the cycle. Covers the
     /// whole screen.
     Mode(IdleMode),
+    /// Title, artist and album over the dimmed cover. Covers the whole
+    /// screen.
+    TrackInfo,
     Play,
     Pause,
     Next,
@@ -93,6 +100,8 @@ pub enum Notice {
 pub struct View {
     pub screen: Screen,
     pub notice: Option<Notice>,
+    /// How long the notice has been showing, for scrolling text.
+    pub notice_age_ms: u64,
     /// Show the "No WiFi" badge.
     pub no_wifi: bool,
 }
@@ -120,7 +129,9 @@ pub struct App {
     idle_mode: IdleMode,
     idle_after_ms: u64,
     preview_until: u64,
-    notice: Option<(Notice, u64)>,
+    /// The notice, when it started and when it ends.
+    notice: Option<(Notice, u64, u64)>,
+    track_info_on_change: bool,
 }
 
 impl App {
@@ -138,7 +149,13 @@ impl App {
             idle_after_ms,
             preview_until: 0,
             notice: None,
+            track_info_on_change: true,
         }
+    }
+
+    /// Whether to show the track info each time a new song starts.
+    pub fn set_track_info_on_change(&mut self, enabled: bool) {
+        self.track_info_on_change = enabled;
     }
 
     pub fn idle_mode(&self) -> IdleMode {
@@ -178,10 +195,20 @@ impl App {
                     CommandFailure::NoActiveDevice => Notice::NoDevice,
                     CommandFailure::Other => Notice::Error,
                 };
-                self.notice = Some((notice, now + NOTICE_MS));
+                self.show(notice, now, NOTICE_MS);
+                None
+            }
+            Event::TrackStarted => {
+                if self.track_info_on_change {
+                    self.show(Notice::TrackInfo, now, TRACK_INFO_MS);
+                }
                 None
             }
         }
+    }
+
+    fn show(&mut self, notice: Notice, now: u64, duration_ms: u64) {
+        self.notice = Some((notice, now, now + duration_ms));
     }
 
     fn on_playback(&mut self, p: Playback, now: u64) {
@@ -248,11 +275,15 @@ impl App {
             }
             InputEvent::Tap(Button::Mode) => {
                 self.idle_mode = self.idle_mode.next();
-                self.notice = Some((Notice::Mode(self.idle_mode), now + MODE_LABEL_MS));
+                self.show(Notice::Mode(self.idle_mode), now, MODE_LABEL_MS);
                 if matches!(self.base_screen(now), Screen::Art { .. }) {
                     self.preview_until = now + MODE_LABEL_MS + PREVIEW_MS;
                 }
                 Some(Action::SaveIdleMode(self.idle_mode))
+            }
+            InputEvent::ShowTrackInfo => {
+                self.show(Notice::TrackInfo, now, TRACK_INFO_MS);
+                None
             }
             InputEvent::OpenPortal => Some(Action::OpenPortal),
             InputEvent::FactoryReset => Some(Action::FactoryReset),
@@ -262,11 +293,11 @@ impl App {
     /// Show a button icon. While the panel is in Off mode, show the mode
     /// name instead, so a press makes it clear the device is on.
     fn feedback(&mut self, notice: Notice, now: u64) {
-        self.notice = Some(if self.base_screen(now) == Screen::Idle(IdleMode::Off) {
-            (Notice::Mode(IdleMode::Off), now + MODE_LABEL_MS)
+        if self.base_screen(now) == Screen::Idle(IdleMode::Off) {
+            self.show(Notice::Mode(IdleMode::Off), now, MODE_LABEL_MS);
         } else {
-            (notice, now + FEEDBACK_MS)
-        });
+            self.show(notice, now, FEEDBACK_MS);
+        }
     }
 
     /// The screen ignoring the Mode preview.
@@ -296,12 +327,11 @@ impl App {
         if matches!(screen, Screen::Art { .. }) && now < self.preview_until {
             screen = Screen::Idle(self.idle_mode);
         }
+        let notice = self.notice.filter(|&(_, _, until)| now < until);
         View {
             screen,
-            notice: self
-                .notice
-                .filter(|&(_, until)| now < until)
-                .map(|(n, _)| n),
+            notice: notice.map(|(n, _, _)| n),
+            notice_age_ms: notice.map_or(0, |(_, start, _)| now - start),
             no_wifi: self.net == NetStatus::Lost,
         }
     }
@@ -310,7 +340,7 @@ impl App {
     /// ending, or going idle), so the display task knows when to wake up.
     pub fn next_change(&self, now: u64) -> Option<u64> {
         let mut times = [None; 3];
-        times[0] = self.notice.map(|(_, until)| until).filter(|&t| t > now);
+        times[0] = self.notice.map(|(_, _, until)| until).filter(|&t| t > now);
         times[1] = Some(self.preview_until).filter(|&t| t > now);
         if let PlayState::Stopped {
             has_art: true,
@@ -436,6 +466,34 @@ mod tests {
             Some(Notice::Mode(IdleMode::DigitalClock))
         );
         assert_eq!(app.view(1_510).notice, None);
+    }
+
+    #[test]
+    fn new_track_shows_info_when_enabled() {
+        let mut app = online(IdleMode::DigitalClock);
+        app.handle(track(true), 0);
+        app.handle(Event::TrackStarted, 100);
+        assert_eq!(app.view(100).notice, Some(Notice::TrackInfo));
+        assert_eq!(app.view(2_100).notice_age_ms, 2_000);
+        assert_eq!(app.view(5_100).notice, None);
+
+        app.set_track_info_on_change(false);
+        app.handle(Event::TrackStarted, 10_000);
+        assert_eq!(app.view(10_000).notice, None);
+    }
+
+    #[test]
+    fn play_hold_shows_info_even_when_auto_show_is_off() {
+        let mut app = online(IdleMode::DigitalClock);
+        app.set_track_info_on_change(false);
+        app.handle(track(true), 0);
+        assert_eq!(
+            app.handle(Event::Input(InputEvent::ShowTrackInfo), 50),
+            None
+        );
+        assert_eq!(app.view(50).notice, Some(Notice::TrackInfo));
+        // No play/pause command from the hold.
+        assert!(app.is_playing());
     }
 
     #[test]

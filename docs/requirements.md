@@ -32,6 +32,7 @@ On Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 5. As a listener, I press buttons on the device to pause, skip or go back.
 6. As the owner, when no music is playing, the panel shows a clock (analog or digital), the weather, a clock plus the weather, or nothing, instead of stale art. I pick which with the mode button.
 7. As the owner, if my WiFi password changes, I hold a button to reopen the setup portal.
+8. As a listener, I can see the song title, artist and album: briefly when a song starts (if I've turned that on), or any time by holding Play/Pause.
 
 ## 3. Functional requirements
 
@@ -51,6 +52,7 @@ On Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 | D-10 | **Weather:** a condition icon (sun, cloud, rain, snow, storm, fog), the current temperature, and today's high and low. Units are °C or °F (configurable). |
 | D-11 | **Clock + weather:** a digital clock on the top half and a weather icon plus current temperature on the bottom half. |
 | D-12 | If weather data is unavailable or older than 2 h, the weather screens show the last known data with a small "stale" marker, or a "No weather" icon if there is none. The clock keeps working. |
+| D-13 | **Track info:** title, artist and album (or show, for podcasts) over the cover dimmed to about 20%, for 5 s. Lines too wide for the panel scroll. Shown by holding Play/Pause for 2 s, and when a new song starts if `ui.track_info_on_change` is on (default on). |
 
 ```mermaid
 stateDiagram-v2
@@ -107,7 +109,7 @@ stateDiagram-v2
 |---|---|
 | P-1 | If no WiFi credentials are stored, or the stored network can't be joined after 30 s, start a soft AP named `OnAir-Setup-XXXX` (last 4 hex digits of the MAC). |
 | P-2 | Run a DNS responder that answers every query with the device's IP, so phones open the captive-portal page automatically. |
-| P-3 | The portal page lists nearby networks, takes the WiFi password, the Spotify Client ID, the timezone, the weather location (city), temperature units and 12/24 h clock, and shows a **Connect Spotify** link. |
+| P-3 | The portal page lists nearby networks, takes the WiFi password, the Spotify Client ID, the timezone, the weather location (city), temperature units, 12/24 h clock and whether to show track info when a song starts, and shows a **Connect Spotify** link. |
 | P-4 | **Spotify sign-in (paste-back flow):** the link opens Spotify's authorize page with `redirect_uri=http://127.0.0.1:8888/callback`. After approval the browser lands on a page that fails to load. The user copies that full URL into the portal. The device extracts `code` and exchanges it, together with its stored PKCE verifier, for tokens. To reach Spotify, the device joins the home WiFi while keeping the setup AP running (AP+STA mode). See Q-4. *(This is needed because Spotify only accepts HTTPS or loopback redirect URIs, and the device can't serve HTTPS with a trusted certificate.)* |
 | P-5 | On success, save the settings, show a confirmation, and reboot into normal mode. |
 | P-6 | Holding **Mode** for 5 s at any time reopens the portal. Holding **Mode + Play** for 10 s erases all settings. |
@@ -137,7 +139,7 @@ sequenceDiagram
 | Control | Input | Behaviour |
 |---|---|---|
 | Knob (10 kΩ linear) | ADC1 pin | Brightness. Read at 20 Hz, smoothed, with hysteresis and a perceptual curve. Fully down sets a minimum brightness floor (configurable, default about 5%) and never blanks the screen. |
-| Button 1 | GPIO, internal pull-up | Play/Pause |
+| Button 1 | GPIO, internal pull-up | Play/Pause: tap to play or pause, hold 2 s to show track info |
 | Button 2 | GPIO | Previous |
 | Button 3 | GPIO | Next |
 | Button 4 | GPIO | Mode: tap to cycle the idle screen (analog clock → digital clock → weather → clock + weather → none), hold 5 s for the portal |
@@ -309,6 +311,7 @@ stateDiagram-v2
 | `weather.city` | City name as typed in the portal |
 | `weather.lat` / `weather.lon` | Coordinates from geocoding |
 | `weather.units` | `c` / `f` |
+| `ui.track_info_on_change` | `true` / `false`: show track info when a song starts |
 
 ## 7. Repository layout
 

@@ -64,6 +64,9 @@ pub struct Settings {
     pub clock_24h: bool,
     pub weather: Option<WeatherLocation>,
     pub units: Units,
+    /// Show the title, artist and album for a few seconds when a new song
+    /// starts.
+    pub track_info_on_change: bool,
 }
 
 impl Default for Settings {
@@ -78,6 +81,7 @@ impl Default for Settings {
             clock_24h: false,
             weather: None,
             units: Units::default(),
+            track_info_on_change: true,
         }
     }
 }
@@ -140,6 +144,7 @@ mod tests {
                 lon: -122.68,
             }),
             units: Units::Fahrenheit,
+            track_info_on_change: false,
         }
     }
 

@@ -21,6 +21,8 @@ pub struct NowPlaying {
     pub title: String,
     /// Artists joined with ", ", or the show name for a podcast.
     pub artist: String,
+    /// Album name. `None` for podcasts.
+    pub album: Option<String>,
     pub is_playing: bool,
     pub progress_ms: u32,
     pub duration_ms: u32,
@@ -76,6 +78,8 @@ struct RawItem {
 
 #[derive(Deserialize)]
 struct RawAlbum {
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     images: Vec<RawImage>,
 }
@@ -136,10 +140,15 @@ fn now_playing(item: RawItem, is_playing: bool, progress_ms: Option<u32>) -> Now
         .or_else(|| item.show.as_ref().and_then(|s| pick_image(&s.images)))
         .map(String::from);
     let item_id = item.id.or(item.uri).unwrap_or_else(|| item.name.clone());
+    let album = item
+        .album
+        .and_then(|a| a.name)
+        .filter(|name| !name.is_empty());
     NowPlaying {
         item_id,
         title: item.name,
         artist,
+        album,
         is_playing,
         progress_ms: progress_ms.unwrap_or(0),
         duration_ms: item.duration_ms,
@@ -269,6 +278,7 @@ mod tests {
                 item_id: "3n3Ppam7vgaVa1iaRUc9Lp".into(),
                 title: "Mr. Brightside".into(),
                 artist: "The Killers".into(),
+                album: Some("Hot Fuss".into()),
                 is_playing: true,
                 progress_ms: 61_234,
                 duration_ms: 222_973,
@@ -294,6 +304,7 @@ mod tests {
         ));
         assert_eq!(np.title, "Episode 42");
         assert_eq!(np.artist, "A Podcast");
+        assert_eq!(np.album, None);
         assert_eq!(np.art_url.as_deref(), Some("https://i.scdn.co/image/ep64"));
     }
 

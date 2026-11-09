@@ -15,6 +15,7 @@ pub mod image;
 pub mod input;
 pub mod schedule;
 pub mod settings;
+pub mod setup;
 pub mod spotify;
 pub mod timezone;
 pub mod weather;

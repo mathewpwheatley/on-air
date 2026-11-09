@@ -12,6 +12,7 @@ use crate::messages::{Control, Update};
 struct Track {
     title: &'static str,
     artist: &'static str,
+    album: Option<&'static str>,
     duration_ms: u32,
     art: Option<Vec<u8>>,
 }
@@ -22,12 +23,14 @@ fn tracks() -> Vec<Track> {
         Track {
             title: "Gradient",
             artist: "Test Pattern",
+            album: Some("Bring-Up Sessions"),
             duration_ms: 40_000,
             art: Some(gradient()),
         },
         Track {
-            title: "Red and Blue",
-            artist: "Fixtures",
+            title: "Red and Blue (Extended Club Mix)",
+            artist: "The Fixtures",
+            album: Some("Sixty-Four Pixels Squared"),
             duration_ms: 30_000,
             art: fixture(include_bytes!(
                 "../../../crates/core/tests/fixtures/art_64.jpg"
@@ -35,7 +38,8 @@ fn tracks() -> Vec<Track> {
         },
         Track {
             title: "Green and White",
-            artist: "Fixtures",
+            artist: "The Fixtures",
+            album: Some("Sixty-Four Pixels Squared"),
             duration_ms: 30_000,
             art: fixture(include_bytes!(
                 "../../../crates/core/tests/fixtures/art_300.jpg"
@@ -44,6 +48,7 @@ fn tracks() -> Vec<Track> {
         Track {
             title: "No Cover",
             artist: "Local File",
+            album: None,
             duration_ms: 20_000,
             art: None,
         },
@@ -145,6 +150,7 @@ fn send_track(
         item_id: track.title.to_string(),
         title: track.title.to_string(),
         artist: track.artist.to_string(),
+        album: track.album.map(String::from),
         is_playing: playing,
         progress_ms,
         duration_ms: track.duration_ms,

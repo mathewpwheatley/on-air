@@ -27,6 +27,8 @@ impl Button {
 pub enum InputEvent {
     /// Released before any hold action fired.
     Tap(Button),
+    /// Play/Pause held alone for [`TRACK_INFO_HOLD_MS`].
+    ShowTrackInfo,
     /// Mode held for [`PORTAL_HOLD_MS`].
     OpenPortal,
     /// Mode + Play held together for [`RESET_HOLD_MS`].
@@ -36,6 +38,7 @@ pub enum InputEvent {
 /// Poll the buttons this often. A press or release counts after four
 /// steady readings in a row, so 20 ms.
 pub const POLL_INTERVAL_MS: u64 = 5;
+pub const TRACK_INFO_HOLD_MS: u64 = 2_000;
 pub const PORTAL_HOLD_MS: u64 = 5_000;
 pub const RESET_HOLD_MS: u64 = 10_000;
 
@@ -99,6 +102,15 @@ impl Buttons {
         } else {
             self.combo_since = None;
             self.reset_fired = false;
+        }
+
+        // Play alone held: show the track info once.
+        if let Some(since) = self.down_since[play]
+            && !self.consumed[play]
+            && now_ms - since >= TRACK_INFO_HOLD_MS
+        {
+            self.consumed[play] = true;
+            emit(InputEvent::ShowTrackInfo);
         }
 
         // Mode alone held: open the portal once.
@@ -250,6 +262,18 @@ mod tests {
         assert_eq!(ev, [InputEvent::OpenPortal]);
         run(&mut b, UP, 8_005, 8_100, &mut ev);
         assert_eq!(ev, [InputEvent::OpenPortal]);
+    }
+
+    #[test]
+    fn play_hold_shows_track_info_once_and_no_tap() {
+        let mut b = Buttons::new();
+        let mut ev = Vec::new();
+        run(&mut b, press(Button::PlayPause), 0, 1_900, &mut ev);
+        assert!(ev.is_empty());
+        run(&mut b, press(Button::PlayPause), 1_905, 4_000, &mut ev);
+        assert_eq!(ev, [InputEvent::ShowTrackInfo]);
+        run(&mut b, UP, 4_005, 4_100, &mut ev);
+        assert_eq!(ev, [InputEvent::ShowTrackInfo]);
     }
 
     #[test]

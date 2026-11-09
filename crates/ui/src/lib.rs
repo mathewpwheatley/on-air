@@ -12,7 +12,7 @@ mod screens;
 mod text;
 
 use embedded_graphics::{pixelcolor::Rgb888, prelude::*, primitives::Rectangle};
-use on_air_core::app::{Screen, View};
+use on_air_core::app::{Notice, Screen, View};
 use on_air_core::timezone::DateTime;
 use on_air_core::weather::{Reading, Units};
 
@@ -33,10 +33,19 @@ pub struct Scene<'a> {
     pub time: Option<DateTime>,
     pub clock_24h: bool,
     pub weather: Option<WeatherInfo>,
+    /// What's playing, for the track info screen.
+    pub track: Option<Track<'a>>,
     /// Setup network name, shown on the setup screen.
     pub setup_network: &'a str,
     /// Any monotonic clock, for scrolling text and blinking.
     pub now_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Track<'a> {
+    pub title: &'a str,
+    pub artist: &'a str,
+    pub album: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,8 +78,10 @@ where
         )?;
         icons::draw(icons::Icon::NoWifi, Point::new(55, 1), 1, target)?;
     }
-    if let Some(notice) = scene.view.notice {
-        screens::notice::draw(notice, target)?;
+    match scene.view.notice {
+        Some(Notice::TrackInfo) => screens::track_info::draw(scene, target)?,
+        Some(notice) => screens::notice::draw(notice, target)?,
+        None => {}
     }
     Ok(())
 }

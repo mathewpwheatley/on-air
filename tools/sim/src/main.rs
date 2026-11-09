@@ -19,22 +19,24 @@ use embedded_graphics_simulator::{
 use on_air_core::app::{Action, App, Event, NetStatus, Playback};
 use on_air_core::input::{ADC_MAX, Buttons, DEFAULT_FLOOR, InputEvent, Knob, POLL_INTERVAL_MS};
 use on_air_core::settings::IdleMode;
+use on_air_core::spotify::NowPlaying;
 use on_air_core::timezone::{self, TimeZone};
 use on_air_core::weather::{Reading, STALE_AFTER_S, Units};
-use on_air_ui::{Framebuffer, HEIGHT, Scene, WIDTH, WeatherInfo};
+use on_air_ui::{Framebuffer, HEIGHT, Scene, Track, WIDTH, WeatherInfo};
 
 use messages::{Control, Update};
 
 const KEYS_HELP: &str = "\
 Keys:
-  1  Play/Pause    2  Previous    3  Next    4  Mode (hold 5 s: setup portal)
+  1  Play/Pause (hold 2 s: track info)    2  Previous    3  Next
+  4  Mode (hold 5 s: setup portal)
   1+4 held 10 s    factory reset
   - / +            brightness knob down / up (hold to repeat)
   W  toggle WiFi lost    S  toggle Spotify sign-in needed
   N  stop playback (fake player)    Esc  leave the setup portal";
 
 /// Environment variables the options read, e.g. from `.env`.
-const ENV_KEYS: [&str; 8] = [
+const ENV_KEYS: [&str; 9] = [
     "SPOTIFY_CLIENT_ID",
     "ON_AIR_LIVE",
     "ON_AIR_CITY",
@@ -42,6 +44,7 @@ const ENV_KEYS: [&str; 8] = [
     "ON_AIR_CLOCK_24H",
     "ON_AIR_TIMEZONE",
     "ON_AIR_RECORD",
+    "ON_AIR_TRACK_INFO",
     "ON_AIR_SCALE",
 ];
 
@@ -72,6 +75,10 @@ struct Args {
     /// Save each new currently-playing response to this folder (with --live).
     #[arg(long, env = "ON_AIR_RECORD")]
     record: Option<PathBuf>,
+    /// Show the title, artist and album for a few seconds when a new song
+    /// starts. Holding Play/Pause for 2 s shows it either way.
+    #[arg(long, env = "ON_AIR_TRACK_INFO", default_value_t = true, action = clap::ArgAction::Set)]
+    track_info: bool,
     /// Window pixels per LED.
     #[arg(long, env = "ON_AIR_SCALE", default_value_t = 8)]
     scale: u32,
@@ -169,7 +176,11 @@ fn main() {
     let mut framebuffer = Framebuffer::new();
 
     let start = Instant::now();
+    // A made-up MAC address; the device uses its real one.
+    let setup_network = on_air_core::setup::network_name([0x34, 0x85, 0x18, 0x00, 0x1a, 0x2b]);
     let mut app = App::new(IdleMode::DigitalClock);
+    app.set_track_info_on_change(args.track_info);
+    let mut track: Option<NowPlaying> = None;
     let mut buttons = Buttons::new();
     let mut knob = Knob::new(DEFAULT_FLOOR);
     let mut knob_position: i32 = ADC_MAX as i32 * 3 / 4;
@@ -268,6 +279,7 @@ fn main() {
                     Action::FactoryReset => {
                         println!("factory reset");
                         app = App::new(IdleMode::DigitalClock);
+                        app.set_track_info_on_change(args.track_info);
                         app.handle(Event::Net(NetStatus::Online), now);
                     }
                 }
@@ -295,9 +307,15 @@ fn main() {
                         has_art: art.is_some(),
                     };
                     app.handle(Event::Playback(playback), now);
+                    let is_new = track.as_ref().map(|t| &t.item_id) != Some(&now_playing.item_id);
+                    if is_new && now_playing.is_playing {
+                        app.handle(Event::TrackStarted, now);
+                    }
+                    track = Some(now_playing);
                 }
                 Update::NowPlaying(None) => {
                     app.handle(Event::Playback(Playback::Nothing), now);
+                    track = None;
                 }
                 Update::SignInNeeded => {
                     sign_in_needed = true;
@@ -336,7 +354,12 @@ fn main() {
                 stale: at.elapsed().as_secs() > STALE_AFTER_S,
                 units,
             }),
-            setup_network: "OnAir-Setup-1A2B",
+            track: track.as_ref().map(|t| Track {
+                title: &t.title,
+                artist: &t.artist,
+                album: t.album.as_deref(),
+            }),
+            setup_network: &setup_network,
             now_ms: now,
         };
         on_air_ui::draw(&scene, &mut framebuffer).expect("framebuffer can't fail");

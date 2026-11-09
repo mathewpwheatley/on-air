@@ -14,7 +14,14 @@ where
     let Some(art) = art else {
         return Ok(());
     };
-    let level = if dimmed { PAUSED_LEVEL } else { 255 };
+    draw_at_level(art, if dimmed { PAUSED_LEVEL } else { 255 }, target)
+}
+
+/// Draw the art at `level`/255 of its full brightness.
+pub fn draw_at_level<D>(art: &[u8], level: u16, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
     let colors = art.chunks_exact(3).map(|p| {
         let s = |v: u8| ((v as u16 * level + 127) / 255) as u8;
         Rgb888::new(s(p[0]), s(p[1]), s(p[2]))

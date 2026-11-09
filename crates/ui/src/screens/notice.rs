@@ -33,8 +33,11 @@ pub fn draw<D>(notice: Notice, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
-    if let Notice::Mode(mode) = notice {
-        return mode_label(mode, target);
+    match notice {
+        Notice::Mode(mode) => return mode_label(mode, target),
+        // Drawn by `track_info`, which needs the scene.
+        Notice::TrackInfo => return Ok(()),
+        _ => {}
     }
     let icon = match notice {
         Notice::Play => Some(Icon::Play),
