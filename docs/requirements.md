@@ -249,13 +249,15 @@ Notes:
 |---|---|
 | Toolchain | Rust Xtensa toolchain installed with `espup`. Build with `cargo` and flash with `espflash`. *(Not PlatformIO, which doesn't support Rust.)* |
 | HAL / runtime | `esp-hal` (`no_std`) + `embassy-executor`, `embassy-time`, `embassy-sync` |
-| Display | `esp-hub75`, which uses the S3's LCD_CAM peripheral with DMA. `embedded-graphics` for text and icons. |
+| Display | `esp-hub75`, which uses the S3's LCD_CAM peripheral with DMA. `embedded-graphics` for drawing, `u8g2-fonts` for text, and `tinyqoi` or `tinybmp` for icons stored as image files. |
 | WiFi / net | `esp-radio` (formerly `esp-wifi`) + `embassy-net` |
 | HTTP(S) | `reqwless` + TLS (see R-2) |
-| JSON | `serde` + `serde-json-core`, or `serde_json` with `alloc` (PSRAM heap) |
+| JSON | `serde` + `serde_json` with `alloc` (PSRAM heap) |
 | JPEG | `zune-jpeg` (`no_std` + `alloc`) |
 | QR | `qrcodegen-no-heap` |
-| Time | `sntpc` |
+| Setup portal | `edge-captive` (captive-portal DNS) + `picoserve` (HTTP server) |
+| Buttons | `debouncr` |
+| Time | `sntpc` for SNTP; `jiff` with its bundled IANA timezone database for local time |
 | Weather | Open-Meteo over HTTPS with `reqwless`; same JSON stack as Spotify |
 | Settings storage | `sequential-storage` on a dedicated flash partition |
 | Heap | `esp-alloc`, backed by PSRAM |
@@ -302,7 +304,7 @@ stateDiagram-v2
 | `spotify.client_id` | From the owner's Spotify developer app |
 | `spotify.refresh_token` | Rewritten whenever Spotify rotates it |
 | `ui.idle_mode` | `clock_digital` / `clock_analog` / `weather` / `clock_weather` / `off` |
-| `ui.tz` | POSIX timezone string for the clock |
+| `ui.timezone` | IANA timezone name for the clock, e.g. `America/Los_Angeles` |
 | `ui.clock_24h` | `true` / `false` |
 | `weather.city` | City name as typed in the portal |
 | `weather.lat` / `weather.lon` | Coordinates from geocoding |
@@ -351,7 +353,7 @@ The software side of each milestone is broken down in [implementation-plan.md](i
 |---|---|---|
 | R-1 | `esp-hub75` may not support this panel's scan pattern, or may need driver-chip setup (some panels use FM6126A-type chips that need an init sequence). | M0 spike comes first. Fallback is a thin Rust wrapper around the C `ESP32-HUB75-MatrixPanel-DMA` library via `esp-idf`, which would mean switching to the `std` stack. |
 | R-2 | TLS: `embedded-tls` supports TLS 1.3 only and has limited certificate verification; `esp-mbedtls` is heavier but more complete. | Decide in M2. The device needs `accounts.spotify.com`, `api.spotify.com`, `i.scdn.co`, `api.open-meteo.com` and `geocoding-api.open-meteo.com`. Pin the root CAs. |
-| R-3 | Rust captive-portal crates are immature. | Write a small one in-repo (soft AP + DNS + `picoserve` or a minimal HTTP server). |
+| R-3 | Rust captive-portal crates are young. | Use `edge-captive` for the DNS side and `picoserve` for HTTP; only the form page and sign-in flow are written in-repo. |
 | R-4 | Spotify developer-mode limits: only allowlisted users, possible Premium requirement for the app owner, and future API policy changes. | Personal use only. Document the app setup in the README. |
 | R-5 | Memory: TLS buffers, JSON and JPEG decoding together. | Put the heap in PSRAM, read large responses as streams, and only download the 64 px image. |
 | R-6 | A readable analog clock and weather layout at 64×64 px. | Mock the screens in the host panel simulator (`tools/`) before M5. |

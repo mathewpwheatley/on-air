@@ -13,7 +13,7 @@ pub const WIDTH: u32 = 64;
 pub const HEIGHT: u32 = 64;
 
 /// Bring-up test pattern: eight vertical color bars over a black-to-white
-/// ramp along the bottom 8 rows. Used in the simulator and for panel bring-up (P3).
+/// ramp along the bottom 8 rows. Used in the simulator and for panel bring-up.
 pub fn draw_test_pattern<D>(target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,

@@ -9,6 +9,7 @@ How the firmware gets built, in what order, and how each piece is tested. Requir
 - **Host first.** Most of the logic (Spotify parsing, OAuth, polling schedule, state machine, screens, input handling) doesn't need hardware. It goes in `no_std` crates that build and test on the Mac. Work can start before the MatrixPortal arrives.
 - **One rendering path.** Every screen is drawn through `embedded-graphics`, so the same code runs in a desktop simulator and on the panel.
 - **Thin firmware.** The `firmware/` crate only wires hardware, network and tasks to the shared crates. If it holds logic that could be tested on the host, move it out.
+- **Use existing crates.** Reach for a maintained crate before writing anything. Only write logic that's specific to On Air. §2.4 lists the choices.
 - **Spike the risky parts early.** Panel driver (R-1), TLS (R-2) and AP+STA WiFi (P-4) each get a small proof before features are built on them.
 
 ```mermaid
@@ -58,10 +59,10 @@ on-air/
 | `backoff` | One exponential-backoff type with jitter, shared by WiFi (max 60 s), Spotify and weather (max 15 min). | N-3, W-5 |
 | `weather` | Open-Meteo forecast and geocoding models, WMO code to icon mapping, and the 2 h staleness check. | W-1, W-3, W-4, D-12 |
 | `app` | The main state machine. Takes events (playback update, button, tick, weather, network status) and returns the screen to show. Covers playing, paused, idle and status, the 2 min idle timer, the idle-screen cycle and the mode-tap preview. | D-5–D-7, D-6 diagram |
-| `input` | Button debounce (20 ms), tap and hold detection (Mode 5 s, Mode + Play 10 s). Knob smoothing, hysteresis, perceptual curve and the 5% floor. | §3.5, P-6 |
+| `input` | Button debounce (`debouncr`), tap and hold detection (Mode 5 s, Mode + Play 10 s). Knob smoothing, hysteresis, perceptual curve and the 5% floor. | §3.5, P-6 |
 | `image` | JPEG decode wrapper (`zune-jpeg`), downscale fallback, gamma table, crossfade blend, current estimate and brightness cap. | D-2–D-4, D-8 |
 | `settings` | Settings struct with a schema version, serialized with `postcard`. Handles defaults and migrations. | §6.3 |
-| `tz` | POSIX TZ string parser with DST rules (`M.m.w.d`), so the clock converts UTC to local time. | D-9 |
+| `timezone` | Thin wrapper over `jiff` with its bundled IANA database (about 230 KB of flash). Converts UTC to local time for zones named like `America/Los_Angeles`. | D-9 |
 
 ### 2.2 `on-air-ui` screens
 
@@ -71,7 +72,7 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 - Digital clock, analog clock, weather, clock + weather, off
 - Status screens: setup QR + scrolling network name, Connecting…, Spotify sign-in needed, No WiFi, Premium needed
 - Overlays: button feedback icons (500 ms), "stale" weather marker
-- Small icon set (weather conditions, play/pause/next/previous, WiFi) as 1-bit bitmaps in code
+- Small icon set (weather conditions, play/pause/next/previous, WiFi), drawn as image files and loaded with `tinyqoi` or `tinybmp`. Clock digits come from `u8g2-fonts`, which has many pixel fonts.
 
 ### 2.3 Firmware modules
 
@@ -86,7 +87,7 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 | `net/sntp` | Time sync at boot and every few hours. |
 | `spotify_task` | Token refresh (proactively at about 55 min), polling on `core::schedule`, art download and decode, playback commands. |
 | `weather_task` | Geocoding once, forecast every 15 min, and only while a weather screen is selected. |
-| `portal/` | Soft AP, DNS responder (small, in-repo), HTTP server (`picoserve`), form page, paste-back handling. |
+| `portal/` | Soft AP, captive-portal DNS (`edge-captive`), HTTP server (`picoserve`), form page, paste-back handling. |
 | `storage` | `sequential-storage` on the `settings` partition. Writes only when a value changes, to limit flash wear. |
 | `supervisor` | Every task reports a heartbeat. The supervisor feeds the hardware watchdog only while all heartbeats are fresh, so one stuck task still triggers a reset. |
 
@@ -100,6 +101,41 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 - HUB75 DMA buffers stay in internal SRAM, since DMA from PSRAM risks flicker.
 - The heap is in PSRAM and holds TLS buffers, JSON and JPEG decoding (R-5).
 - Spotify calls pass `market=from_token`, which drops the long `available_markets` lists and keeps responses small.
+
+### 2.4 Crates
+
+Every crate must build without the standard library (except in `tools/sim`), and on Rust 1.90 (see the P0 notes).
+
+| Concern | Crate | Used in |
+|---|---|---|
+| JSON | `serde` + `serde_json` (with `alloc`) | core |
+| Settings format | `postcard` | core |
+| PKCE | `sha2` + `base64` | core |
+| Query strings, form bodies | `form_urlencoded` | core |
+| Timezones and local time | `jiff` with its bundled IANA database | core |
+| JPEG decoding | `zune-jpeg` | core |
+| Button debounce | `debouncr` | core |
+| Drawing | `embedded-graphics` | ui |
+| Clock and text fonts | `u8g2-fonts` | ui |
+| Icons, from image files | `tinyqoi` or `tinybmp` | ui |
+| QR code | `qrcodegen-no-heap` | ui |
+| Desktop window | `embedded-graphics-simulator` (SDL2) | sim |
+| Host HTTP, for `--live` | `reqwest` | sim |
+| HAL, runtime, WiFi | `esp-hal`, `esp-rtos` (Embassy), `esp-radio`, `embassy-net` | firmware |
+| Panel driver | `esp-hub75` | firmware |
+| HTTPS client | `reqwless` + TLS (`esp-mbedtls` or `embedded-tls`) | firmware |
+| SNTP | `sntpc` | firmware |
+| Captive-portal DNS | `edge-captive` | firmware |
+| Portal web server | `picoserve` | firmware |
+| Settings storage | `sequential-storage` | firmware |
+
+Still hand-written, because they're short and specific to On Air:
+- the backoff
+- the poll schedule
+- the button taps and holds
+- the knob curve
+- the 64 px box-filter resize
+- the current cap
 
 ## 3. Phases
 
@@ -187,7 +223,7 @@ Each phase lists its tasks and when it counts as done.
 
 ### P7 — Setup portal (M4)
 
-- Soft AP `OnAir-Setup-XXXX`, a DNS responder, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
+- Soft AP `OnAir-Setup-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
 - Form page with a WiFi scan list and the fields from P-3. Plain HTML with a little inline JS, served from flash.
 - Paste-back sign-in using `core::auth`, then the token exchange over AP+STA.
 - Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6).
@@ -230,6 +266,6 @@ Each phase lists its tasks and when it counts as done.
 |---|---|---|---|
 | 1 | TLS library (R-2) | P5 | `esp-mbedtls` |
 | 2 | JSON parsing: `serde_json` + `alloc` or `serde-json-core` | P1 | `serde_json` + `alloc`. The heap is in PSRAM anyway and it's simpler. |
-| 3 | Timezone entry in the portal | P1 | Take the timezone from the city lookup. Open-Meteo geocoding returns an IANA name, and a small table in flash maps it to a POSIX string. That removes the timezone field from the portal (P-3). |
+| 3 | Timezone entry in the portal | P7 | Take the timezone from the city lookup. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. That would remove the timezone field from the portal (P-3). |
 | 4 | Logging: `log` + `esp-println` or `defmt` | P0 | `log` to start, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
 | 5 | Q-4 fix for phone internet during sign-in | P7 | Decide after testing on real phones. |

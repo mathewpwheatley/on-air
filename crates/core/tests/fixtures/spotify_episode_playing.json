@@ -1,0 +1,23 @@
+{
+  "timestamp": 1762637400000,
+  "progress_ms": 600000,
+  "is_playing": true,
+  "currently_playing_type": "episode",
+  "item": {
+    "type": "episode",
+    "id": "512ojhOuo1ktJprKbVcKyQ",
+    "uri": "spotify:episode:512ojhOuo1ktJprKbVcKyQ",
+    "name": "Episode 42",
+    "duration_ms": 3600000,
+    "images": [
+      { "url": "https://i.scdn.co/image/ep640", "height": 640, "width": 640 },
+      { "url": "https://i.scdn.co/image/ep64", "height": 64, "width": 64 }
+    ],
+    "show": {
+      "name": "A Podcast",
+      "images": [
+        { "url": "https://i.scdn.co/image/show64", "height": 64, "width": 64 }
+      ]
+    }
+  }
+}

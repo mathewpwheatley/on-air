@@ -1,0 +1,16 @@
+{
+  "timestamp": 1762637400000,
+  "progress_ms": 0,
+  "is_playing": true,
+  "currently_playing_type": "track",
+  "item": {
+    "type": "track",
+    "id": null,
+    "uri": "spotify:local:Artist:Album:Song:180",
+    "name": "Song",
+    "duration_ms": 180000,
+    "is_local": true,
+    "album": { "name": "Album", "images": [] },
+    "artists": [ { "name": "Artist" } ]
+  }
+}

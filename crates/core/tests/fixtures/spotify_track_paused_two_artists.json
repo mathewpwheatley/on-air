@@ -1,0 +1,24 @@
+{
+  "timestamp": 1762637400000,
+  "progress_ms": 1000,
+  "is_playing": false,
+  "currently_playing_type": "track",
+  "item": {
+    "type": "track",
+    "id": "7ouMYWpwJ422jRcDASZB7P",
+    "uri": "spotify:track:7ouMYWpwJ422jRcDASZB7P",
+    "name": "Under Pressure",
+    "duration_ms": 248440,
+    "album": {
+      "name": "Hot Space",
+      "images": [
+        { "url": "https://i.scdn.co/image/big", "height": 640, "width": 640 },
+        { "url": "https://i.scdn.co/image/mid", "height": 300, "width": 300 }
+      ]
+    },
+    "artists": [
+      { "name": "Queen" },
+      { "name": "David Bowie" }
+    ]
+  }
+}
