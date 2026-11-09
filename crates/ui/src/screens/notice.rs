@@ -6,7 +6,7 @@ use on_air_core::app::Notice;
 use on_air_core::settings::IdleMode;
 
 use crate::icons::{self, Icon};
-use crate::text::{self, Align, DIM, GREY, SMALL, WHITE};
+use crate::text::{self, Align, DIM, SMALL, WHITE};
 
 pub fn draw<D>(notice: Notice, target: &mut D) -> Result<(), D::Error>
 where
@@ -39,7 +39,7 @@ where
         first,
         Point::new(32, 27),
         Align::Center,
-        GREY,
+        WHITE,
         target,
     )?;
     text::draw(

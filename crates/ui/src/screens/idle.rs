@@ -34,10 +34,10 @@ where
         IdleMode::Weather => weather(scene.weather, target),
         IdleMode::ClockWeather => clock_weather(scene.time, scene.clock_24h, scene.weather, target),
         // Dimmed like a paused cover, since nothing is playing.
+        // Blank until something has played since power-up.
         IdleMode::LastSong => match scene.art {
             Some(cover) => art::draw(Some(cover), true, target),
-            // Nothing has played since power-up, so there's no cover yet.
-            None => digital_clock(scene.time, scene.clock_24h, target),
+            None => Ok(()),
         },
         IdleMode::Off => Ok(()),
     }
@@ -146,18 +146,28 @@ where
         Point::new(32, 26),
         target,
     )?;
-    if let Some(time) = time {
-        let weekday = WEEKDAYS[time.weekday().to_monday_zero_offset() as usize];
-        let month = MONTHS[(time.month() - 1) as usize];
-        text::draw(
-            &SMALL,
-            format_args!("{weekday} {month} {}", time.day()),
-            Point::new(32, 47),
-            Align::Center,
-            GREY,
-            target,
-        )?;
-    }
+    date(time, 47, target)
+}
+
+/// The date, like `SUN NOV 8`, centered at `y`. Nothing before the clock
+/// syncs.
+fn date<D>(time: Option<DateTime>, y: i32, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    let Some(time) = time else {
+        return Ok(());
+    };
+    let weekday = WEEKDAYS[time.weekday().to_monday_zero_offset() as usize];
+    let month = MONTHS[(time.month() - 1) as usize];
+    text::draw(
+        &SMALL,
+        format_args!("{weekday} {month} {}", time.day()),
+        Point::new(32, y),
+        Align::Center,
+        GREY,
+        target,
+    )?;
     Ok(())
 }
 
@@ -212,6 +222,23 @@ where
     Ok(())
 }
 
+fn unit_letter(units: Units) -> &'static str {
+    match units {
+        Units::Celsius => "C",
+        Units::Fahrenheit => "F",
+    }
+}
+
+/// How wide `temperature` draws, degree sign and unit included.
+fn temperature_width(font: &FontRenderer, temp: i16, units: Units, ring: u32) -> i32 {
+    let number = ShortText::format(format_args!("{temp}"));
+    text::width(font, number.as_str()) as i32
+        + 1
+        + ring as i32
+        + 1
+        + text::width(&SMALL, unit_letter(units)) as i32
+}
+
 /// A temperature like `11°F`: the number in `font`, a small ring for the
 /// degree sign, and the unit letter beside it at the top. `x` is the center,
 /// or the left edge with `Align::Left`.
@@ -231,15 +258,9 @@ where
     D: DrawTarget<Color = Rgb888>,
 {
     let number = ShortText::format(format_args!("{temp}"));
-    let unit = match units {
-        Units::Celsius => "C",
-        Units::Fahrenheit => "F",
-    };
-    let number_width = text::width(font, number.as_str()) as i32;
-    let total = number_width + 1 + ring as i32 + 1 + text::width(&SMALL, unit) as i32;
     let left = match align {
         Align::Left => x,
-        _ => x - total / 2,
+        _ => x - temperature_width(font, temp, units, ring) / 2,
     };
     let Some(area) = text::draw(
         font,
@@ -259,7 +280,7 @@ where
         .draw(target)?;
     text::draw(
         &SMALL,
-        unit,
+        unit_letter(units),
         Point::new(ring_x + ring as i32 + 1, top + 3),
         Align::Left,
         color,
@@ -333,13 +354,14 @@ fn clock_weather<D>(
 where
     D: DrawTarget<Color = Rgb888>,
 {
-    time_with_suffix(&[&MEDIUM], time, clock_24h, Point::new(32, 15), target)?;
+    time_with_suffix(&[&MEDIUM], time, clock_24h, Point::new(32, 16), target)?;
+    date(time, 31, target)?;
 
     let Some(info) = weather else {
         text::draw(
             &SMALL,
             "NO WEATHER",
-            Point::new(32, 46),
+            Point::new(32, 50),
             Align::Center,
             GREY,
             target,
@@ -352,20 +374,26 @@ where
     } else {
         (WHITE, None)
     };
-    icons::draw_tinted(r.icon.into(), Point::new(4, 38), 1, tint, target)?;
+    // Center the icon and temperature together as one group.
+    const GAP: i32 = 4;
+    let icon = Icon::from(r.icon);
+    let icon_width = icon.size().width as i32;
+    let group_width = icon_width + GAP + temperature_width(&MEDIUM, r.temp, info.units, 3);
+    let left = 32 - group_width / 2;
+    icons::draw_tinted(icon, Point::new(left, 42), 1, tint, target)?;
     temperature(
         &MEDIUM,
         r.temp,
         info.units,
         3,
-        24,
-        46,
+        left + icon_width + GAP,
+        50,
         Align::Left,
         color,
         target,
     )?;
     if info.stale {
-        icons::draw(Icon::Stale, Point::new(1, 33), 1, target)?;
+        icons::draw(Icon::Stale, Point::new(1, 37), 1, target)?;
     }
     Ok(())
 }

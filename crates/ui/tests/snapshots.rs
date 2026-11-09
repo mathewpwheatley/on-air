@@ -221,9 +221,14 @@ fn last_song() {
     let mut s = base(Screen::Idle(IdleMode::LastSong));
     s.art = Some(&art);
     check("last_song", &s);
-    // Nothing has played yet: falls back to the digital clock.
-    s.art = None;
-    check("last_song_no_cover", &s);
+}
+
+#[test]
+fn last_song_without_cover_is_black() {
+    // Nothing has played since power-up.
+    let mut fb = Framebuffer::new();
+    draw(&base(Screen::Idle(IdleMode::LastSong)), &mut fb).unwrap();
+    assert!(fb.as_bytes().iter().all(|&b| b == 0));
 }
 
 #[test]
