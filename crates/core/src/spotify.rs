@@ -287,6 +287,29 @@ mod tests {
         );
     }
 
+    /// A real response recorded with `just sim --record`.
+    #[test]
+    fn recorded_response() {
+        let np = playing(include_bytes!(
+            "../tests/fixtures/spotify_recorded_track.json"
+        ));
+        assert_eq!(
+            np,
+            NowPlaying {
+                item_id: "3jAvvLf01asKBOSVrIFkmq".into(),
+                title: "Someone Like You".into(),
+                artist: "Mac Miller".into(),
+                album: Some("Watching Movies with the Sound Off".into()),
+                is_playing: true,
+                progress_ms: 395,
+                duration_ms: 256_423,
+                art_url: Some(
+                    "https://i.scdn.co/image/ab67616d00004851f33072178773789a4c2b8110".into()
+                ),
+            }
+        );
+    }
+
     #[test]
     fn paused_track_without_64px_picks_smallest_big_enough() {
         let np = playing(include_bytes!(

@@ -3,3 +3,6 @@ target/
 .DS_Store
 .vscode/
 .env
+
+# Raw Spotify recordings from `just sim --record`; scrub before moving into fixtures.
+crates/core/tests/fixtures/recorded/

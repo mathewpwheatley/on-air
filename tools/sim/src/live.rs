@@ -173,6 +173,11 @@ pub fn run(
     updates: Sender<Update>,
     controls: Receiver<Control>,
 ) {
+    if let Some(dir) = &record
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        eprintln!("couldn't create {}: {e}", dir.display());
+    }
     let http = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
