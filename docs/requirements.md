@@ -51,7 +51,7 @@ On-Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 | D-9 | **Clock:** time comes from SNTP in the configured timezone. Digital shows HH:MM (12 h or 24 h, configurable) with the date underneath. Analog shows a round face with hour and minute hands, updated every minute. Before the first SNTP sync, show "--:--" instead of a wrong time. |
 | D-10 | **Weather:** a condition icon (sun, cloud, rain, snow, storm, fog), the current temperature, and today's high and low. Units are °C or °F (configurable). |
 | D-11 | **Clock + weather:** a digital clock on top, the date under it, and a weather icon plus current temperature at the bottom. |
-| D-14 | **Weather + tides:** a weather icon plus current temperature on top, then the next high and low tide times, each after a small wave icon with an up or down arrow. Shows "--:--" until tide times arrive. |
+| D-14 | **Weather + tides:** a weather icon plus current temperature on top, the date under it, then the next high and low tide times, each after a small wave icon with an up or down arrow. Shows "--:--" until tide times arrive. |
 | D-12 | If weather data is unavailable or older than 2 h, the weather screens show the last known data with a small "stale" marker, or a "No weather" icon if there is none. The clock keeps working. |
 | D-13 | **Track info:** title, artist and album (or show, for podcasts) over the cover dimmed to about 20%, for 5 s. Lines too wide for the panel scroll. Shown by holding Play/Pause for 2 s. |
 
@@ -115,13 +115,13 @@ stateDiagram-v2
 
 | ID | Requirement |
 |---|---|
-| P-1 | If no WiFi credentials are stored, or the stored network can't be joined after 30 s, start a soft AP named `OnAir-Setup-XXXX` (last 4 hex digits of the MAC). |
+| P-1 | If no WiFi credentials are stored, or the stored network can't be joined after 30 s, start a soft AP named `OnAir-XXXX` (last 4 hex digits of the MAC), short enough to fit across the panel. |
 | P-2 | Run a DNS responder that answers every query with the device's IP, so phones open the captive-portal page automatically. |
 | P-3 | The portal page has four steps: **WiFi** (nearby networks or a typed name, and the password), **Spotify** (Client ID, the app setup instructions and a **Connect Spotify** link), **Settings** (city search, required since it sets the clock's timezone; temperature units; 12/24 h clock; idle time, 1–30 min) and **Finish**. The clock's timezone comes from the chosen city. |
 | P-4 | **Spotify sign-in (paste-back flow):** the link opens Spotify's authorize page with `redirect_uri=http://127.0.0.1:8888/callback`. After approval the browser lands on a page that fails to load. The user copies that full URL into the portal. The device extracts `code` and exchanges it, together with its stored PKCE verifier, for tokens. To reach Spotify, the device joins the home WiFi while keeping the setup AP running (AP+STA mode). See Q-4. *(This is needed because Spotify only accepts HTTPS or loopback redirect URIs, and the device can't serve HTTPS with a trusted certificate.)* |
 | P-5 | On success, save the settings, show a confirmation, and reboot into normal mode. |
 | P-6 | Holding **Mode** for 5 s at any time reopens the portal. Holding **Mode + Play** for 10 s erases all settings. |
-| P-7 | The panel shows a QR code for joining the setup network, plus the network name as scrolling text. |
+| P-7 | The panel shows a QR code for joining the setup network, with the network name centered underneath. |
 
 ```mermaid
 sequenceDiagram
@@ -130,7 +130,7 @@ sequenceDiagram
     participant Acc as accounts.spotify.com
 
     Dev->>Dev: Start soft AP, generate PKCE verifier + challenge
-    Owner->>Dev: Join OnAir-Setup-XXXX (captive portal opens)
+    Owner->>Dev: Join OnAir-XXXX (captive portal opens)
     Owner->>Dev: Submit WiFi, Client ID, timezone, city, units
     Dev->>Dev: Join home WiFi while keeping the soft AP up
     Owner->>Acc: Tap Connect Spotify (authorize URL with code_challenge)

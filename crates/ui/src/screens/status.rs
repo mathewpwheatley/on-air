@@ -9,9 +9,8 @@ use crate::text::{self, Align, DIM, GREY, SMALL, TINY, WHITE};
 const QR_VERSION: Version = Version::new(3);
 const QR_BUFFER: usize = QR_VERSION.buffer_len();
 
-/// QR code for joining the open setup network, plus the name scrolling
-/// along the bottom.
-pub fn setup<D>(network: &str, now_ms: u64, target: &mut D) -> Result<(), D::Error>
+/// QR code for joining the open setup network, with its name underneath.
+pub fn setup<D>(network: &str, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
@@ -73,15 +72,11 @@ where
         }
     }
 
-    // Scroll right to left, one pixel every 40 ms.
-    let width = text::width(&SMALL, network) as i64;
-    let span = width + 64;
-    let x = 64 - (now_ms as i64 / 40) % span;
     text::draw(
         &SMALL,
         network,
-        Point::new(x as i32, 60),
-        Align::Left,
+        Point::new(32, 60),
+        Align::Center,
         WHITE,
         target,
     )?;

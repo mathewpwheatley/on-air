@@ -73,7 +73,7 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 
 - Album art (from a decoded framebuffer), with paused dimming
 - Digital clock, analog clock, weather, clock + weather, weather + tides, last song, off
-- Status screens: setup QR + scrolling network name, Connecting…, Spotify sign-in needed, No WiFi, Premium needed
+- Status screens: setup QR + network name, Connecting…, Spotify sign-in needed, No WiFi, Premium needed
 - Overlays: button feedback icons (500 ms), "stale" weather marker
 - Small icon set (weather conditions, play/pause/next/previous, WiFi), drawn as image files and loaded with `tinyqoi` or `tinybmp`. Clock digits come from `u8g2-fonts`, which has many pixel fonts.
 
@@ -185,7 +185,7 @@ Each phase lists its tasks and when it counts as done.
 - **Sign-in in `--live`.** Spotify redirects to `127.0.0.1:8888`, which on the Mac is the Mac itself, so a small local server (`tiny_http`) catches the callback. The device still uses paste-back. Both share `core::auth`.
 - **Icons** are 24-bit BMPs in `crates/ui/assets/icons/`, stored top-down. Black is transparent. Edit them in any pixel editor.
 - **Fonts:** `logisoso20`/`logisoso16` digits for the clock and temperature, `5x7` and `4x6` for labels.
-- **Setup QR** encodes `WIFI:S:<network>;;` (open network, version 2, 2 px per module) with the name scrolling below.
+- **Setup QR** encodes `WIFI:S:<network>;;` (open network, version 2, 2 px per module) with the name centered below.
 - **Snapshots** live in `crates/ui/tests/snapshots/`. `just snapshots` re-renders them, and every test run writes 8× previews to `target/snapshot-previews/`.
 
 ### P3 — Panel bring-up (M0)
@@ -233,7 +233,7 @@ Each phase lists its tasks and when it counts as done.
 
 ### P7 — Setup portal (M4)
 
-- Soft AP `OnAir-Setup-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
+- Soft AP `OnAir-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
 - Serve `core::portal::PAGE` and the routes listed in `core::portal` with `picoserve`. The page, form checking, sign-in session and JSON replies are already built and tested; the device supplies the WiFi scan, joining, geocoding and the token exchange.
 - Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA.
 - Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6).

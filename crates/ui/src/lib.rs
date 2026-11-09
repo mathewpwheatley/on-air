@@ -116,7 +116,7 @@ where
     match scene.view.screen {
         Screen::Art { dimmed } => screens::art::draw(scene.art, dimmed, target),
         Screen::Idle(mode) => screens::idle::draw(mode, scene, target),
-        Screen::Setup => screens::status::setup(scene.setup_network, scene.now_ms, target),
+        Screen::Setup => screens::status::setup(scene.setup_network, target),
         Screen::Connecting => screens::status::connecting(scene.now_ms, target),
         Screen::SignInNeeded => screens::status::sign_in_needed(target),
     }

@@ -33,9 +33,13 @@ where
         IdleMode::AnalogClock => analog_clock(scene.time, target),
         IdleMode::Weather => weather(scene.weather, target),
         IdleMode::ClockWeather => clock_weather(scene.time, scene.clock_24h, scene.weather, target),
-        IdleMode::WeatherTides => {
-            weather_tides(scene.weather, scene.tides, scene.clock_24h, target)
-        }
+        IdleMode::WeatherTides => weather_tides(
+            scene.time,
+            scene.clock_24h,
+            scene.weather,
+            scene.tides,
+            target,
+        ),
         // Dimmed like a paused cover, since nothing is playing.
         // Blank until something has played since power-up.
         IdleMode::LastSong => match scene.art {
@@ -410,23 +414,25 @@ where
     Ok(())
 }
 
-/// Weather on top, then the next high and low tide, each after a wave icon
-/// with an up or down arrow.
+/// Weather on top, the date, then the next high and low tide, each after a
+/// wave icon with an up or down arrow.
 fn weather_tides<D>(
+    time: Option<DateTime>,
+    clock_24h: bool,
     weather: Option<WeatherInfo>,
     tides: Option<TideTimes>,
-    clock_24h: bool,
     target: &mut D,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
-    weather_row(weather, 8, target)?;
+    weather_row(weather, 5, target)?;
+    date(time, 30, target)?;
 
     const GAP: i32 = 4;
     let rows = [
-        (Icon::TideHigh, tides.and_then(|t| t.high), 40),
-        (Icon::TideLow, tides.and_then(|t| t.low), 52),
+        (Icon::TideHigh, tides.and_then(|t| t.high), 43),
+        (Icon::TideLow, tides.and_then(|t| t.low), 54),
     ];
     let label = |time: Option<DateTime>| match time {
         Some(time) => tide_time(&time, clock_24h),

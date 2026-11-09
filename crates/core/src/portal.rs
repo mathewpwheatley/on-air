@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn full_setup_flow() {
-        let mut portal = Portal::new(Settings::default(), "OnAir-Setup-1A2B");
+        let mut portal = Portal::new(Settings::default(), "OnAir-1A2B");
         let mut events = Vec::new();
 
         assert_eq!(
@@ -1129,7 +1129,7 @@ mod tests {
     fn saving_a_new_city_checks_for_tides() {
         let coast = include_bytes!("../tests/fixtures/openmeteo_marine_san_francisco.json");
         let san_francisco = "place=set&city=San+Francisco&lat=37.77&lon=-122.42&timezone=America%2FLos_Angeles&units=f&clock=12&idle_minutes=5";
-        let mut portal = Portal::new(Settings::default(), "OnAir-Setup-1A2B");
+        let mut portal = Portal::new(Settings::default(), "OnAir-1A2B");
         let mut events = Vec::new();
 
         // The check fails: saved anyway, with tides unknown.
@@ -1271,7 +1271,7 @@ mod tests {
             spotify_refresh_token: Some("secret-token".into()),
             ..Settings::default()
         };
-        let json = Status::new(&settings, "OnAir-Setup-1A2B", WifiState::Connected).to_json();
+        let json = Status::new(&settings, "OnAir-1A2B", WifiState::Connected).to_json();
         assert!(!json.contains("secret"));
         assert!(json.contains(r#""wifi":"connected""#));
         assert!(json.contains(r#""spotify_signed_in":true"#));

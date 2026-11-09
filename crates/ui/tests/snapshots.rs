@@ -73,7 +73,7 @@ fn base(screen: Screen) -> Scene<'static> {
             artist: "The Killers",
             album: Some("Hot Fuss"),
         }),
-        setup_network: "OnAir-Setup-1A2B",
+        setup_network: "OnAir-1A2B",
         now_ms: 0,
     }
 }
