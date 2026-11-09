@@ -281,3 +281,7 @@ Each phase lists its tasks and when it counts as done.
 | 3 | Timezone entry in the portal | Done | Decided: the timezone comes from the city picked in the portal. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. |
 | 4 | Logging: `log` + `esp-println` or `defmt` | P0 | `log` to start, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
 | 5 | Q-4 fix for phone internet during sign-in | P7 | Decide after testing on real phones. |
+
+## 6. After v1
+
+Stretch goals, such as a larger 128×128 panel and live visualizations driven by a microphone, are listed in [requirements.md §11](requirements.md#11-stretch-goals-after-v1). They get their own plan once v1 is done.

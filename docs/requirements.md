@@ -373,3 +373,53 @@ The software side of each milestone is broken down in [implementation-plan.md](i
 2. Add the redirect URI `http://127.0.0.1:8888/callback`.
 3. Select **Web API**.
 4. Copy the **Client ID** into the On-Air setup portal.
+
+## 11. Stretch goals (after v1)
+
+Ideas for after v1 works end to end. None of these are in the v1 milestones.
+
+### 11.1 Larger panel
+
+A bigger display, for example 128×128 pixels, for sharper covers and more room on the clock and info screens.
+
+| ID | Goal | Notes |
+|---|---|---|
+| SG-1 | **Panel size as a setting:** one value for the panel's width and height, used everywhere instead of the fixed 64. | Today 64 is fixed in a few constants (`ui::WIDTH`/`HEIGHT`, `core::image::SIZE`, `core::spotify::ART_SIZE`) and in about 45 hand-placed screen coordinates. |
+| SG-2 | **Screens that lay themselves out:** each screen positions its parts from the panel size, with icon and font sizes chosen to suit it. | Most of the work. Snapshot tests at both 64 and 128. u8g2 has larger pixel fonts. |
+| SG-3 | **Larger covers:** at 128 px, download Spotify's 300 px cover and shrink it. | The resize code already handles this. Decoding takes more memory, which is fine with PSRAM. |
+| SG-4 | **Simulator at any size:** e.g. `ON_AIR_PANEL=128`, to design and check screens before buying panels. | Comes almost free with SG-1 and SG-2. |
+| SG-5 | **Hardware:** a single 128×128 HUB75 panel is rare; usually four 64×64 panels are chained in a 2×2 grid. | 4× the pixels to refresh, so check `esp-hub75` chaining and flicker on the MatrixPortal S3 (as in M0). Up to 4× the current at full white, so a bigger 5 V supply than USB-C and a separate panel feed. Needs a bigger enclosure. |
+
+### 11.2 Live visualizations
+
+Alternatives to the album art while music is playing: a waveform or other visualizations that move with the music.
+
+**Where the audio comes from:** Spotify doesn't provide it. The Web API has never given access to the audio stream, and its audio-analysis and audio-features data (beats, tempo, loudness) were switched off for new developer apps in late 2024. So a real visualization needs a **microphone on the device** that listens to the room.
+
+| ID | Goal | Notes |
+|---|---|---|
+| SG-6 | **Waveform:** an oscilloscope-style line of the sound, across the panel. | Simplest to draw. Needs the microphone (SG-11). |
+| SG-7 | **Spectrum bars:** frequency bands as vertical bars, with slowly falling peak dots. | Needs an FFT; `microfft` (`no_std`) on the ESP32-S3. A 512-point FFT at about 30 frames per second is well within the chip's budget. |
+| SG-8 | **Cover-coloured visualizations:** waveform or bars drawn in colours taken from the current cover, so they still feel tied to the song. | Pick 2–4 main colours from the 64×64 cover once per track. |
+| SG-9 | **Art + visualizer:** the cover dimmed, with a thin spectrum or VU strip along the bottom edge. | Keeps the cover as the main thing. |
+| SG-10 | **Beat pulse:** the cover gently brightens on loud beats. | Peak detection on the microphone level; no FFT needed. |
+| SG-11 | **Microphone hardware:** an I2S MEMS microphone (for example the Adafruit SPH0645 or an INMP441 breakout). | Adds a part to the bill of materials, 3 signal pins (clock, word select, data) plus 3V3 and GND, and a small opening in the enclosure. Check which MatrixPortal S3 pins are free (Q-5). |
+| SG-12 | **Choosing a live mode:** how the owner picks art, visualizer, or both while music plays. | Options: a portal setting; or Mode cycling live modes while music plays (it currently previews idle screens); or a new hold gesture. Decide when building it. |
+
+**Visualizations without a microphone:** possible from data Spotify does give, but they don't react to the sound:
+- a progress bar for the current track
+- a slow ambient animation in the cover's colours
+
+These could ship earlier as simpler live modes.
+
+**Risks:**
+- **Room noise:** the microphone hears everything in the room, including talking and a dishwasher. Use automatic gain and a noise floor, and accept that it shows the room's sound rather than Spotify's.
+- **Placement:** inside the case, the microphone may hear the case more than the room. It needs an opening in the printed enclosure.
+- **CPU time:** sampling and the FFT run alongside the display refresh and WiFi. Keep the FFT on its own task and check the panel doesn't flicker (P3).
+
+**Before the hardware:** the simulator could use the Mac's microphone (the `cpal` crate) to try each visualization at 64×64, the same way the screens were designed.
+
+| ID | Open question |
+|---|---|
+| Q-5 | Which MatrixPortal S3 pins are free for an I2S microphone once the knob and buttons use A0–A4? Check the Adafruit pinout. |
+| Q-6 | For a 2×2 chain of 64×64 panels, can the MatrixPortal S3 refresh 128×128 without flicker, and how much current does it draw at the brightness we'd use? |
