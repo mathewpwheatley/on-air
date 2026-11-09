@@ -143,6 +143,7 @@ pub fn cap_brightness(frame: &[u8], brightness: u8, model: &PowerModel) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn pixel(frame: &[u8], x: usize, y: usize) -> [u8; 3] {
         let i = (y * SIZE + x) * 3;
@@ -153,42 +154,37 @@ mod tests {
         a.iter().zip(b).all(|(&x, y)| x.abs_diff(y) <= 12)
     }
 
-    #[test]
-    fn decodes_64px_cover() {
-        let f = decode_art(include_bytes!("../tests/fixtures/art_64.jpg")).unwrap();
-        assert_eq!(f.len(), FRAME_LEN);
+    /// The test covers are blocks of solid color, so a pixel well inside a
+    /// block should come out close to that color.
+    #[rstest]
+    #[case::cover_64px_left(include_bytes!("../tests/fixtures/art_64.jpg"), (8, 32), [255, 0, 0])]
+    #[case::cover_64px_right(include_bytes!("../tests/fixtures/art_64.jpg"), (56, 32), [0, 0, 255])]
+    #[case::cover_300px_top(include_bytes!("../tests/fixtures/art_300.jpg"), (32, 8), [0, 255, 0])]
+    #[case::cover_300px_bottom(
+        include_bytes!("../tests/fixtures/art_300.jpg"),
+        (32, 56),
+        [255, 255, 255],
+    )]
+    fn decodes_covers_to_panel_size(
+        #[case] jpeg: &[u8],
+        #[case] (x, y): (usize, usize),
+        #[case] color: [u8; 3],
+    ) {
+        let frame = decode_art(jpeg).unwrap();
+        assert_eq!(frame.len(), FRAME_LEN);
         assert!(
-            close(pixel(&f, 8, 32), [255, 0, 0]),
+            close(pixel(&frame, x, y), color),
             "{:?}",
-            pixel(&f, 8, 32)
-        );
-        assert!(
-            close(pixel(&f, 56, 32), [0, 0, 255]),
-            "{:?}",
-            pixel(&f, 56, 32)
-        );
-    }
-
-    #[test]
-    fn decodes_and_shrinks_300px_cover() {
-        let f = decode_art(include_bytes!("../tests/fixtures/art_300.jpg")).unwrap();
-        assert_eq!(f.len(), FRAME_LEN);
-        assert!(
-            close(pixel(&f, 32, 8), [0, 255, 0]),
-            "{:?}",
-            pixel(&f, 32, 8)
-        );
-        assert!(
-            close(pixel(&f, 32, 56), [255, 255, 255]),
-            "{:?}",
-            pixel(&f, 32, 56)
+            pixel(&frame, x, y)
         );
     }
 
-    #[test]
-    fn rejects_garbage() {
-        assert_eq!(decode_art(b"not a jpeg"), Err(DecodeError::Invalid));
-        assert_eq!(decode_art(&[]), Err(DecodeError::Invalid));
+    #[rstest]
+    #[case::garbage(b"not a jpeg")]
+    #[case::empty(b"")]
+    #[case::truncated(&include_bytes!("../tests/fixtures/art_64.jpg")[..100])]
+    fn rejects_bad_jpegs(#[case] bytes: &[u8]) {
+        assert_eq!(decode_art(bytes), Err(DecodeError::Invalid));
     }
 
     #[test]
@@ -212,36 +208,44 @@ mod tests {
         assert!(t.windows(2).all(|w| w[0] <= w[1]));
     }
 
-    #[test]
-    fn crossfade_endpoints_and_midpoint() {
-        let a = [0u8, 100, 255];
-        let b = [255u8, 100, 0];
+    #[rstest]
+    #[case::start(0, [0, 100, 255])]
+    #[case::end(255, [255, 100, 0])]
+    #[case::midpoint(128, [128, 100, 127])]
+    fn crossfade_steps(#[case] step: u8, #[case] expected: [u8; 3]) {
         let mut out = [0u8; 3];
-        crossfade(&a, &b, 0, &mut out);
-        assert_eq!(out, a);
-        crossfade(&a, &b, 255, &mut out);
-        assert_eq!(out, b);
-        crossfade(&a, &b, 128, &mut out);
-        assert_eq!(out, [128, 100, 127]);
+        crossfade(&[0, 100, 255], &[255, 100, 0], step, &mut out);
+        assert_eq!(out, expected);
+    }
+
+    #[rstest]
+    #[case::full(255, [255, 128, 0])]
+    #[case::paused_dim(102, [102, 51, 0])]
+    #[case::off(0, [0, 0, 0])]
+    fn scale_brightness(#[case] level: u8, #[case] expected: [u8; 3]) {
+        let mut frame = [255u8, 128, 0];
+        scale(&mut frame, level);
+        assert_eq!(frame, expected);
     }
 
     #[test]
-    fn scale_brightness() {
-        let mut f = [255u8, 128, 0];
-        scale(&mut f, 102); // about 40%, the paused dim
-        assert_eq!(f, [102, 51, 0]);
-    }
-
-    #[test]
-    fn current_cap_only_dims_bright_frames() {
+    fn current_cap_dims_a_white_frame_under_budget() {
         let white = vec![255u8; FRAME_LEN];
         assert_eq!(estimate_ma(&white, 255, &DEFAULT_POWER), 4_000);
         let capped = cap_brightness(&white, 255, &DEFAULT_POWER);
         assert!(estimate_ma(&white, capped, &DEFAULT_POWER) <= DEFAULT_POWER.panel_budget_ma);
         assert_eq!(capped, 137);
+    }
 
-        // Typical art: a dim frame passes through unchanged.
-        let dim = vec![60u8; FRAME_LEN];
-        assert_eq!(cap_brightness(&dim, 255, &DEFAULT_POWER), 255);
+    #[rstest]
+    #[case::typical_art_at_full(60, 255)]
+    #[case::white_already_dimmed(255, 100)]
+    #[case::black(0, 255)]
+    fn current_cap_leaves_safe_frames_alone(#[case] level: u8, #[case] brightness: u8) {
+        let frame = vec![level; FRAME_LEN];
+        assert_eq!(
+            cap_brightness(&frame, brightness, &DEFAULT_POWER),
+            brightness
+        );
     }
 }

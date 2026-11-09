@@ -18,3 +18,5 @@ embedded-graphics = "0.8.2"
 embedded-graphics-simulator = "0.8.0"
 jiff = { version = "0.2", default-features = false, features = ["alloc", "tzdb-bundle-always"] }
 libm = "0.2"
+# Parameterized tests. The default features only add async test support.
+rstest = { version = "0.28", default-features = false }

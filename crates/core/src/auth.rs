@@ -189,6 +189,7 @@ pub fn needs_refresh(now_s: u64, issued_at_s: u64, expires_in_s: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// RFC 7636 Appendix B test vector.
     const RFC_RANDOM: [u8; 32] = [
@@ -203,58 +204,50 @@ mod tests {
         assert_eq!(p.challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     }
 
-    #[test]
-    fn authorize_url_has_every_parameter_encoded() {
+    #[rstest]
+    #[case::start("https://accounts.spotify.com/authorize?response_type=code&")]
+    #[case::client_id("client_id=abc123")]
+    #[case::scopes(
+        "scope=user-read-currently-playing+user-read-playback-state+user-modify-playback-state"
+    )]
+    #[case::redirect("redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback")]
+    #[case::challenge_and_state("code_challenge_method=S256&code_challenge=CHAL&state=st8")]
+    fn authorize_url_has_every_parameter_encoded(#[case] part: &str) {
         let url = authorize_url("abc123", "CHAL", "st8");
-        assert!(url.starts_with("https://accounts.spotify.com/authorize?response_type=code&"));
-        assert!(url.contains("client_id=abc123"));
-        assert!(url.contains(
-            "scope=user-read-currently-playing+user-read-playback-state+user-modify-playback-state"
-        ));
-        assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback"));
-        assert!(url.contains("code_challenge_method=S256&code_challenge=CHAL&state=st8"));
+        assert!(url.contains(part), "{url}");
     }
 
-    #[test]
-    fn callback_happy_path_with_whitespace() {
-        let pasted = "  http://127.0.0.1:8888/callback?code=AQB%2Dx_y&state=st8\n";
-        assert_eq!(parse_callback(pasted, "st8").as_deref(), Ok("AQB-x_y"));
+    #[rstest]
+    #[case::pasted_with_whitespace(
+        "  http://127.0.0.1:8888/callback?code=AQB%2Dx_y&state=st8\n",
+        "AQB-x_y"
+    )]
+    #[case::bare_query("code=abc&state=st8", "abc")]
+    fn callback_gives_the_code(#[case] pasted: &str, #[case] code: &str) {
+        assert_eq!(parse_callback(pasted, "st8").as_deref(), Ok(code));
     }
 
-    #[test]
-    fn callback_errors() {
-        assert_eq!(
-            parse_callback(
-                "http://127.0.0.1:8888/callback?error=access_denied&state=st8",
-                "st8"
-            ),
-            Err(CallbackError::Denied("access_denied".into()))
-        );
-        assert_eq!(
-            parse_callback("http://127.0.0.1:8888/callback?code=abc&state=old", "st8"),
-            Err(CallbackError::StateMismatch)
-        );
-        assert_eq!(
-            parse_callback("http://127.0.0.1:8888/callback?code=abc", "st8"),
-            Err(CallbackError::StateMismatch)
-        );
-        assert_eq!(
-            parse_callback("http://127.0.0.1:8888/callback?state=st8", "st8"),
-            Err(CallbackError::NotACallback)
-        );
-        assert_eq!(
-            parse_callback("hello", "st8"),
-            Err(CallbackError::NotACallback)
-        );
-        assert_eq!(parse_callback("", "st8"), Err(CallbackError::NotACallback));
-    }
-
-    #[test]
-    fn bare_query_is_accepted() {
-        assert_eq!(
-            parse_callback("code=abc&state=st8", "st8").as_deref(),
-            Ok("abc")
-        );
+    #[rstest]
+    #[case::denied(
+        "http://127.0.0.1:8888/callback?error=access_denied&state=st8",
+        CallbackError::Denied("access_denied".into())
+    )]
+    #[case::old_state(
+        "http://127.0.0.1:8888/callback?code=abc&state=old",
+        CallbackError::StateMismatch
+    )]
+    #[case::no_state(
+        "http://127.0.0.1:8888/callback?code=abc",
+        CallbackError::StateMismatch
+    )]
+    #[case::no_code(
+        "http://127.0.0.1:8888/callback?state=st8",
+        CallbackError::NotACallback
+    )]
+    #[case::not_a_url("hello", CallbackError::NotACallback)]
+    #[case::empty("", CallbackError::NotACallback)]
+    fn callback_errors(#[case] pasted: &str, #[case] error: CallbackError) {
+        assert_eq!(parse_callback(pasted, "st8"), Err(error));
     }
 
     #[test]
@@ -269,52 +262,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn token_responses() {
-        let ok = parse_token_response(
-            200,
-            include_bytes!("../tests/fixtures/spotify_token_ok.json"),
-        );
+    #[rstest]
+    #[case::rotated_refresh_token(
+        include_bytes!("../tests/fixtures/spotify_token_ok.json"),
+        "BQD-access-token",
+        Some("AQC-new-refresh-token"),
+    )]
+    #[case::same_refresh_token(
+        include_bytes!("../tests/fixtures/spotify_token_ok_no_refresh.json"),
+        "BQD-access-token-2",
+        None,
+    )]
+    fn token_replies(
+        #[case] body: &[u8],
+        #[case] access_token: &str,
+        #[case] refresh_token: Option<&str>,
+    ) {
         assert_eq!(
-            ok,
+            parse_token_response(200, body),
             Ok(Tokens {
-                access_token: "BQD-access-token".into(),
+                access_token: access_token.into(),
                 expires_in_s: 3600,
-                refresh_token: Some("AQC-new-refresh-token".into()),
+                refresh_token: refresh_token.map(Into::into),
             })
-        );
-        let ok = parse_token_response(
-            200,
-            include_bytes!("../tests/fixtures/spotify_token_ok_no_refresh.json"),
-        )
-        .unwrap();
-        assert_eq!(ok.refresh_token, None);
-
-        let err = parse_token_response(
-            400,
-            include_bytes!("../tests/fixtures/spotify_token_invalid_grant.json"),
-        );
-        assert_eq!(err, Err(TokenError::InvalidGrant));
-        assert_eq!(
-            parse_token_response(400, br#"{"error":"invalid_client"}"#),
-            Err(TokenError::InvalidClient)
-        );
-        assert_eq!(
-            parse_token_response(400, br#"{"error":"unsupported_grant_type"}"#),
-            Err(TokenError::Other("unsupported_grant_type".into()))
-        );
-        assert_eq!(
-            parse_token_response(503, b"<html>down</html>"),
-            Err(TokenError::Malformed { status: 503 })
         );
     }
 
-    #[test]
-    fn refresh_timing() {
-        assert!(!needs_refresh(1_000, 1_000, 3600));
-        assert!(!needs_refresh(1_000 + 3299, 1_000, 3600));
-        assert!(needs_refresh(1_000 + 3300, 1_000, 3600));
-        // A very short lifetime refreshes immediately rather than underflowing.
-        assert!(needs_refresh(5, 5, 60));
+    #[rstest]
+    #[case::invalid_grant(
+        400,
+        include_bytes!("../tests/fixtures/spotify_token_invalid_grant.json"),
+        TokenError::InvalidGrant,
+    )]
+    #[case::invalid_client(400, br#"{"error":"invalid_client"}"#, TokenError::InvalidClient)]
+    #[case::other(
+        400,
+        br#"{"error":"unsupported_grant_type"}"#,
+        TokenError::Other("unsupported_grant_type".into()),
+    )]
+    #[case::html_outage(503, b"<html>down</html>", TokenError::Malformed { status: 503 })]
+    #[case::ok_but_unreadable(200, b"{}", TokenError::Malformed { status: 200 })]
+    fn token_errors(#[case] status: u16, #[case] body: &[u8], #[case] error: TokenError) {
+        assert_eq!(parse_token_response(status, body), Err(error));
+    }
+
+    #[rstest]
+    #[case::just_issued(1_000, 1_000, 3600, false)]
+    #[case::before_the_margin(1_000 + 3299, 1_000, 3600, false)]
+    #[case::at_the_margin(1_000 + 3300, 1_000, 3600, true)]
+    #[case::short_lifetime_refreshes_at_once(5, 5, 60, true)]
+    fn refresh_timing(
+        #[case] now_s: u64,
+        #[case] issued_s: u64,
+        #[case] lifetime_s: u32,
+        #[case] needed: bool,
+    ) {
+        assert_eq!(needs_refresh(now_s, issued_s, lifetime_s), needed);
     }
 }

@@ -763,6 +763,7 @@ impl Portal {
 mod tests {
     use super::*;
     use crate::http::Response;
+    use rstest::rstest;
 
     fn random(buffer: &mut [u8]) {
         buffer.fill(7);
@@ -973,105 +974,135 @@ mod tests {
         );
     }
 
-    #[test]
-    fn failed_fetches_get_friendly_messages() {
+    #[rstest]
+    #[case::city_search_offline(
+        Method::Get,
+        "/api/places?q=x",
+        "",
+        Some(Err(NetworkError)),
+        "Couldn't search"
+    )]
+    #[case::city_search_server_error(
+        Method::Get,
+        "/api/places?q=x",
+        "",
+        Some(Ok(Response::new(500, &b""[..]))),
+        "Couldn't search"
+    )]
+    #[case::city_search_unreadable(
+        Method::Get,
+        "/api/places?q=x",
+        "",
+        Some(Ok(Response::new(200, &b"oops"[..]))),
+        "Couldn't search"
+    )]
+    #[case::sign_in_not_started(
+        Method::Post,
+        "/api/spotify/finish",
+        "callback_url=x",
+        None,
+        "Connect Spotify first"
+    )]
+    #[case::sign_in_bad_client_id(
+        Method::Post,
+        "/api/spotify/start",
+        "client_id=nope",
+        None,
+        "client_id"
+    )]
+    #[case::wifi_missing_name(Method::Post, "/api/wifi", "ssid=", None, "ssid")]
+    fn failures_get_friendly_messages(
+        #[case] method: Method,
+        #[case] target: &str,
+        #[case] body: &str,
+        #[case] fetched: Option<Outcome>,
+        #[case] message: &str,
+    ) {
         let mut portal = Portal::new(Settings::default(), "n");
-        let mut events = Vec::new();
-        let Reply::Json(json) = request(
-            &mut portal,
-            Method::Get,
-            "/api/places?q=x",
-            "",
-            Some(Err(NetworkError)),
-            &mut events,
-        ) else {
-            panic!()
+        let reply = request(&mut portal, method, target, body, fetched, &mut Vec::new());
+        let Reply::Json(json) = reply else {
+            panic!("{reply:?}")
         };
-        assert!(json.contains("Couldn't search"));
-        assert_eq!(
-            request(
-                &mut portal,
-                Method::Get,
-                "/api/places?q=",
-                "",
-                None,
-                &mut events
-            ),
-            Reply::Json("[]".into())
-        );
-        assert_eq!(
-            request(&mut portal, Method::Get, "/nope", "", None, &mut events),
-            Reply::NotFound
-        );
-        let Reply::Json(json) = request(
-            &mut portal,
-            Method::Post,
-            "/api/spotify/finish",
-            "callback_url=x",
-            None,
-            &mut events,
-        ) else {
-            panic!()
-        };
-        assert!(json.contains("Connect Spotify first"));
+        assert!(json.starts_with(r#"{"ok":false"#), "{json}");
+        assert!(json.contains(message), "{json}");
     }
 
-    #[test]
-    fn captive_probes_are_recognised() {
-        for path in [
+    #[rstest]
+    #[case::empty_city_search(Method::Get, "/api/places?q=", Reply::Json("[]".into()))]
+    #[case::unknown_path(Method::Get, "/nope", Reply::NotFound)]
+    #[case::wrong_method(Method::Get, "/api/wifi", Reply::NotFound)]
+    #[case::captive_probe(Method::Get, "/generate_204", Reply::Redirect)]
+    #[case::page(Method::Get, "/", Reply::Page)]
+    fn simple_replies(#[case] method: Method, #[case] target: &str, #[case] expected: Reply) {
+        let mut portal = Portal::new(Settings::default(), "n");
+        assert_eq!(
+            request(&mut portal, method, target, "", None, &mut Vec::new()),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn captive_probes_are_recognised(
+        #[values(
             "/generate_204",
             "/hotspot-detect.html",
             "/connecttest.txt",
             "/ncsi.txt",
-            "/generate_204?x=1",
-        ] {
-            assert!(is_captive_probe(path), "{path}");
-        }
-        for path in ["/", "/api/status", "/favicon.ico"] {
-            assert!(!is_captive_probe(path), "{path}");
-        }
+            "/generate_204?x=1"
+        )]
+        path: &str,
+    ) {
+        assert!(is_captive_probe(path));
     }
 
-    #[test]
-    fn wifi_form() {
+    #[rstest]
+    fn other_paths_are_not_captive_probes(
+        #[values("/", "/api/status", "/favicon.ico")] path: &str,
+    ) {
+        assert!(!is_captive_probe(path));
+    }
+
+    #[rstest]
+    #[case::name_with_spaces("ssid=Home+WiFi&password=hunter22", "Home WiFi", "hunter22")]
+    #[case::open_network("ssid=Cafe&password=", "Cafe", "")]
+    #[case::spaces_in_password_kept("ssid=Home&password=+spaces+ok+", "Home", " spaces ok ")]
+    #[case::shortest_password("ssid=Home&password=12345678", "Home", "12345678")]
+    #[case::longest_password(&alloc::format!("ssid=Home&password={}", "p".repeat(63)), "Home", &"p".repeat(63))]
+    #[case::raw_hex_key(&alloc::format!("ssid=Home&password={}", "a".repeat(64)), "Home", &"a".repeat(64))]
+    #[case::longest_name(&alloc::format!("ssid={}", "x".repeat(32)), &"x".repeat(32), "")]
+    fn wifi_form_accepts(#[case] body: &str, #[case] ssid: &str, #[case] password: &str) {
         assert_eq!(
-            parse_wifi("ssid=Home+WiFi&password=hunter22"),
+            parse_wifi(body),
             Ok(WifiForm {
-                ssid: "Home WiFi".into(),
-                password: "hunter22".into()
+                ssid: ssid.into(),
+                password: password.into()
             })
         );
-        // Open network, and a password with spaces kept as typed.
-        assert_eq!(parse_wifi("ssid=Cafe&password=").unwrap().password, "");
-        assert_eq!(
-            parse_wifi("ssid=Home&password=+spaces+ok+")
-                .unwrap()
-                .password,
-            " spaces ok "
-        );
-        // 64 hex characters is a raw key.
-        let key = "a".repeat(64);
-        assert!(parse_wifi(&alloc::format!("ssid=Home&password={key}")).is_ok());
-
-        let errors = parse_wifi("ssid=&password=short").unwrap_err();
-        assert!(errors.contains_key("ssid") && errors.contains_key("password"));
-        let long_name = "x".repeat(33);
-        assert!(
-            parse_wifi(&alloc::format!("ssid={long_name}"))
-                .unwrap_err()
-                .contains_key("ssid")
-        );
     }
 
-    #[test]
-    fn client_id() {
-        let id = "0123456789ABCDEF0123456789abcdef";
-        assert_eq!(
-            parse_client_id(&alloc::format!(" {id} ")).unwrap(),
-            id.to_ascii_lowercase()
-        );
-        assert!(parse_client_id("too-short").is_err());
-        assert!(parse_client_id(&"g".repeat(32)).is_err());
+    #[rstest]
+    #[case::no_name("ssid=&password=hunter22", &["ssid"])]
+    #[case::name_too_long(&alloc::format!("ssid={}", "x".repeat(33)), &["ssid"])]
+    #[case::password_too_short("ssid=Home&password=short", &["password"])]
+    #[case::password_too_long(&alloc::format!("ssid=Home&password={}", "p".repeat(65)), &["password"])]
+    #[case::sixty_four_but_not_hex(&alloc::format!("ssid=Home&password={}", "g".repeat(64)), &["password"])]
+    #[case::both("ssid=&password=short", &["password", "ssid"])]
+    fn wifi_form_rejects(#[case] body: &str, #[case] fields: &[&str]) {
+        let errors = parse_wifi(body).unwrap_err();
+        assert_eq!(errors.keys().copied().collect::<Vec<_>>(), fields);
+    }
+
+    #[rstest]
+    #[case::trimmed_and_lowercased(
+        " 0123456789ABCDEF0123456789abcdef ",
+        Some("0123456789abcdef0123456789abcdef")
+    )]
+    #[case::too_short("too-short", None)]
+    #[case::not_hex(&"g".repeat(32), None)]
+    #[case::too_long(&"a".repeat(33), None)]
+    #[case::empty("", None)]
+    fn client_ids(#[case] typed: &str, #[case] expected: Option<&str>) {
+        assert_eq!(parse_client_id(typed).ok().as_deref(), expected);
     }
 
     #[test]
@@ -1190,19 +1221,40 @@ mod tests {
         assert_eq!(settings.timezone, "Europe/Berlin");
     }
 
+    const GOOD_PLACE: &str =
+        "place=set&city=Portland&lat=45.52&lon=-122.68&timezone=America%2FLos_Angeles";
+
+    /// One bad field at a time, with everything else valid.
+    #[rstest]
+    #[case::latitude_out_of_range("place=set&city=Portland&lat=91&lon=0&timezone=UTC", "", "place")]
+    #[case::longitude_out_of_range(
+        "place=set&city=Portland&lat=0&lon=181&timezone=UTC",
+        "",
+        "place"
+    )]
+    #[case::latitude_not_a_number("place=set&city=Portland&lat=x&lon=0&timezone=UTC", "", "place")]
+    #[case::unknown_timezone("place=set&city=Portland&lat=0&lon=0&timezone=Nowhere", "", "place")]
+    #[case::no_city_name("place=set&city=&lat=0&lon=0&timezone=UTC", "", "place")]
+    #[case::units(GOOD_PLACE, "&units=k", "units")]
+    #[case::clock(GOOD_PLACE, "&clock=13", "clock")]
+    #[case::idle_too_short(GOOD_PLACE, "&idle_minutes=0", "idle_minutes")]
+    #[case::idle_too_long(GOOD_PLACE, "&idle_minutes=31", "idle_minutes")]
+    #[case::idle_not_a_number(GOOD_PLACE, "&idle_minutes=soon", "idle_minutes")]
+    fn display_form_errors(#[case] place: &str, #[case] rest: &str, #[case] field: &str) {
+        let errors = parse_display(&alloc::format!("{place}{rest}")).unwrap_err();
+        assert_eq!(errors.keys().copied().collect::<Vec<_>>(), [field]);
+    }
+
     #[test]
-    fn display_form_errors() {
+    fn display_form_reports_every_bad_field() {
         let errors =
             parse_display("place=set&city=Portland&lat=91&lon=0&timezone=Nowhere&units=k&clock=13&idle_minutes=31")
                 .unwrap_err();
         assert_eq!(errors.len(), 4);
-        assert!(
-            errors.contains_key("place")
-                && errors.contains_key("units")
-                && errors.contains_key("clock")
-                && errors.contains_key("idle_minutes")
-        );
-        // Leaving the idle time out keeps the saved one.
+    }
+
+    #[test]
+    fn display_form_without_idle_time_keeps_the_saved_one() {
         assert_eq!(
             parse_display("place=keep&units=c&clock=12")
                 .unwrap()
@@ -1237,9 +1289,16 @@ mod tests {
             json,
             r#"[{"ssid":"A","signal":90,"secure":true},{"ssid":"B","signal":70,"secure":true}]"#
         );
-        assert_eq!(signal_from_dbm(-50), 100);
-        assert_eq!(signal_from_dbm(-75), 50);
-        assert_eq!(signal_from_dbm(-100), 0);
+    }
+
+    #[rstest]
+    #[case::very_strong(-30, 100)]
+    #[case::strong(-50, 100)]
+    #[case::middling(-75, 50)]
+    #[case::weakest(-100, 0)]
+    #[case::below_weakest(-120, 0)]
+    fn signal_strength(#[case] dbm: i8, #[case] percent: u8) {
+        assert_eq!(signal_from_dbm(dbm), percent);
     }
 
     #[test]

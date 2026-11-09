@@ -13,14 +13,13 @@ pub fn network_name(mac: [u8; 6]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn uses_last_two_bytes_in_uppercase_hex() {
-        assert_eq!(
-            network_name([0x34, 0x85, 0x18, 0x00, 0x1a, 0x2b]),
-            "OnAir-Setup-1A2B"
-        );
-        assert_eq!(network_name([0; 6]), "OnAir-Setup-0000");
-        assert_eq!(network_name([0xff; 6]), "OnAir-Setup-FFFF");
+    #[rstest]
+    #[case::last_two_bytes_in_uppercase_hex([0x34, 0x85, 0x18, 0x00, 0x1a, 0x2b], "OnAir-Setup-1A2B")]
+    #[case::zeros([0; 6], "OnAir-Setup-0000")]
+    #[case::all_ones([0xff; 6], "OnAir-Setup-FFFF")]
+    fn network_names(#[case] mac: [u8; 6], #[case] expected: &str) {
+        assert_eq!(network_name(mac), expected);
     }
 }

@@ -209,12 +209,15 @@ fn curve(position: i32, floor: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     const UP: [bool; 4] = [false; 4];
 
-    fn press(b: Button) -> [bool; 4] {
+    fn press(buttons: &[Button]) -> [bool; 4] {
         let mut p = UP;
-        p[b as usize] = true;
+        for &b in buttons {
+            p[b as usize] = true;
+        }
         p
     }
 
@@ -227,14 +230,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn short_press_is_a_tap_on_release() {
+    /// Hold `held` until `until` ms, then let go. Returns the events while
+    /// held, and all events once released.
+    fn hold(held: &[Button], until: u64) -> (Vec<InputEvent>, Vec<InputEvent>) {
         let mut b = Buttons::new();
-        let mut ev = Vec::new();
-        run(&mut b, press(Button::Next), 0, 100, &mut ev);
-        assert!(ev.is_empty());
-        run(&mut b, UP, 105, 200, &mut ev);
-        assert_eq!(ev, [InputEvent::Tap(Button::Next)]);
+        let mut events = Vec::new();
+        run(&mut b, press(held), 0, until, &mut events);
+        let while_held = events.clone();
+        run(
+            &mut b,
+            UP,
+            until + POLL_INTERVAL_MS,
+            until + 100,
+            &mut events,
+        );
+        (while_held, events)
+    }
+
+    #[rstest]
+    fn short_press_is_a_tap_on_release(
+        #[values(Button::PlayPause, Button::Previous, Button::Next, Button::Mode)] button: Button,
+    ) {
+        let (while_held, all) = hold(&[button], 100);
+        assert!(while_held.is_empty());
+        assert_eq!(all, [InputEvent::Tap(button)]);
     }
 
     #[test]
@@ -244,7 +263,7 @@ mod tests {
         for t in (0..60).step_by(5) {
             // Chatter: toggles every poll, never steady for four readings.
             let state = if t % 10 == 0 {
-                press(Button::PlayPause)
+                press(&[Button::PlayPause])
             } else {
                 UP
             };
@@ -254,68 +273,46 @@ mod tests {
         assert!(ev.is_empty(), "{ev:?}");
     }
 
-    #[test]
-    fn mode_hold_opens_portal_once_and_no_tap() {
-        let mut b = Buttons::new();
-        let mut ev = Vec::new();
-        run(&mut b, press(Button::Mode), 0, 8_000, &mut ev);
-        assert_eq!(ev, [InputEvent::OpenPortal]);
-        run(&mut b, UP, 8_005, 8_100, &mut ev);
-        assert_eq!(ev, [InputEvent::OpenPortal]);
+    /// A long hold fires its action once, while still held, and letting go
+    /// afterwards doesn't add a tap.
+    #[rstest]
+    #[case::play_shows_track_info(&[Button::PlayPause], TRACK_INFO_HOLD_MS, InputEvent::ShowTrackInfo)]
+    #[case::mode_opens_portal(&[Button::Mode], PORTAL_HOLD_MS, InputEvent::OpenPortal)]
+    #[case::mode_and_play_reset_without_portal(
+        &[Button::Mode, Button::PlayPause],
+        RESET_HOLD_MS,
+        InputEvent::FactoryReset,
+    )]
+    fn long_hold_fires_once(
+        #[case] held: &[Button],
+        #[case] hold_ms: u64,
+        #[case] expected: InputEvent,
+    ) {
+        let (while_held, all) = hold(held, hold_ms * 3 / 2);
+        assert_eq!(while_held, [expected]);
+        assert_eq!(all, [expected]);
     }
 
-    #[test]
-    fn play_hold_shows_track_info_once_and_no_tap() {
-        let mut b = Buttons::new();
-        let mut ev = Vec::new();
-        run(&mut b, press(Button::PlayPause), 0, 1_900, &mut ev);
-        assert!(ev.is_empty());
-        run(&mut b, press(Button::PlayPause), 1_905, 4_000, &mut ev);
-        assert_eq!(ev, [InputEvent::ShowTrackInfo]);
-        run(&mut b, UP, 4_005, 4_100, &mut ev);
-        assert_eq!(ev, [InputEvent::ShowTrackInfo]);
+    /// Letting go before the hold time is up.
+    #[rstest]
+    #[case::play_is_a_tap(&[Button::PlayPause], TRACK_INFO_HOLD_MS, &[InputEvent::Tap(Button::PlayPause)])]
+    #[case::mode_is_a_tap(&[Button::Mode], PORTAL_HOLD_MS, &[InputEvent::Tap(Button::Mode)])]
+    #[case::mode_and_play_do_nothing(&[Button::Mode, Button::PlayPause], RESET_HOLD_MS, &[])]
+    fn released_before_the_hold_time(
+        #[case] held: &[Button],
+        #[case] hold_ms: u64,
+        #[case] expected: &[InputEvent],
+    ) {
+        let (while_held, all) = hold(held, hold_ms - 100);
+        assert!(while_held.is_empty(), "{while_held:?}");
+        assert_eq!(all, expected);
     }
 
-    #[test]
-    fn mode_tap_under_hold_time() {
-        let mut b = Buttons::new();
-        let mut ev = Vec::new();
-        run(&mut b, press(Button::Mode), 0, 4_000, &mut ev);
-        run(&mut b, UP, 4_005, 4_100, &mut ev);
-        assert_eq!(ev, [InputEvent::Tap(Button::Mode)]);
-    }
-
-    #[test]
-    fn mode_plus_play_resets_once_without_opening_portal() {
-        let mut b = Buttons::new();
-        let mut ev = Vec::new();
-        let mut both = UP;
-        both[Button::Mode as usize] = true;
-        both[Button::PlayPause as usize] = true;
-        run(&mut b, both, 0, 15_000, &mut ev);
-        assert_eq!(ev, [InputEvent::FactoryReset]);
-        run(&mut b, UP, 15_005, 15_100, &mut ev);
-        assert_eq!(ev, [InputEvent::FactoryReset]);
-    }
-
-    #[test]
-    fn letting_go_of_combo_early_does_nothing() {
-        let mut b = Buttons::new();
-        let mut ev = Vec::new();
-        let mut both = UP;
-        both[Button::Mode as usize] = true;
-        both[Button::PlayPause as usize] = true;
-        run(&mut b, both, 0, 3_000, &mut ev);
-        run(&mut b, UP, 3_005, 3_100, &mut ev);
-        assert!(ev.is_empty(), "{ev:?}");
-    }
-
-    #[test]
-    fn knob_maps_ends_to_floor_and_full() {
-        let mut k = Knob::new(DEFAULT_FLOOR);
-        assert_eq!(k.update(0), Some(DEFAULT_FLOOR));
-        let mut k = Knob::new(DEFAULT_FLOOR);
-        assert_eq!(k.update(ADC_MAX), Some(255));
+    #[rstest]
+    #[case::fully_down(0, DEFAULT_FLOOR)]
+    #[case::fully_up(ADC_MAX, 255)]
+    fn knob_maps_ends_to_floor_and_full(#[case] position: u16, #[case] level: u8) {
+        assert_eq!(Knob::new(DEFAULT_FLOOR).update(position), Some(level));
     }
 
     #[test]

@@ -148,10 +148,25 @@ pub fn next_tides(turns: &[TideTurn], now_s: i64) -> NextTides {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     const SAN_FRANCISCO: &[u8] =
         include_bytes!("../tests/fixtures/openmeteo_marine_san_francisco.json");
     const DENVER: &[u8] = include_bytes!("../tests/fixtures/openmeteo_marine_denver.json");
+
+    fn high(at_s: i64) -> TideTurn {
+        TideTurn {
+            kind: TideKind::High,
+            at_s,
+        }
+    }
+
+    fn low(at_s: i64) -> TideTurn {
+        TideTurn {
+            kind: TideKind::Low,
+            at_s,
+        }
+    }
 
     #[test]
     fn tide_url_asks_for_hourly_heights_at_sea() {
@@ -172,52 +187,64 @@ mod tests {
             assert!(pair[0].at_s < pair[1].at_s);
         }
         // 2026-11-09 09:18 PST, between the 09:00 and 10:00 readings.
-        assert_eq!(
-            turns[2],
-            TideTurn {
-                kind: TideKind::High,
-                at_s: 1_794_244_725
-            }
-        );
+        assert_eq!(turns[2], high(1_794_244_725));
     }
 
-    #[test]
-    fn inland_location_has_no_tides() {
-        assert_eq!(parse_tides(DENVER), Ok(Vec::new()));
-        assert_eq!(support_from(DENVER), TideSupport::Unavailable);
-        assert_eq!(support_from(SAN_FRANCISCO), TideSupport::Available);
+    /// Hourly heights, starting at time 0.
+    #[rstest]
+    #[case::peak_on_the_hour(&[Some(0.0), Some(1.0), Some(0.0)], &[high(3600)])]
+    #[case::dip_on_the_hour(&[Some(1.0), Some(0.0), Some(1.0)], &[low(3600)])]
+    #[case::peak_between_hours(&[Some(0.0), Some(1.0), Some(0.5)], &[high(3600 + 600)])]
+    #[case::flat_top_counts_once(
+        &[Some(0.0), Some(1.0), Some(1.0), Some(0.0), Some(-1.0)],
+        &[high(5400)],
+    )]
+    #[case::rising_only(&[Some(0.0), Some(1.0), Some(2.0)], &[])]
+    #[case::gap_hides_the_turn(&[Some(0.0), None, Some(1.0), Some(0.0)], &[])]
+    #[case::too_short(&[Some(0.0), Some(1.0)], &[])]
+    #[case::all_missing(&[None, None, None], &[])]
+    fn turns_in_heights(#[case] heights: &[Option<f32>], #[case] expected: &[TideTurn]) {
+        let time: Vec<i64> = (0..heights.len() as i64).map(|h| h * 3600).collect();
+        let body = serde_json::json!({
+            "hourly": { "time": time, "sea_level_height_msl": heights }
+        });
+        let body = serde_json::to_vec(&body).unwrap();
+        assert_eq!(parse_tides(&body), Ok(expected.to_vec()));
     }
 
-    #[test]
-    fn unreadable_reply_is_unknown() {
-        assert_eq!(support_from(b"not json"), TideSupport::Unknown);
-        let mismatched = br#"{"hourly":{"time":[0,3600],"sea_level_height_msl":[1.0]}}"#;
-        assert_eq!(parse_tides(mismatched), Err(ParseError));
+    #[rstest]
+    #[case::not_json(b"not json")]
+    #[case::mismatched_lengths(br#"{"hourly":{"time":[0,3600],"sea_level_height_msl":[1.0]}}"#)]
+    #[case::no_hourly(br#"{"latitude":1.0}"#)]
+    fn bad_replies_are_errors(#[case] body: &[u8]) {
+        assert_eq!(parse_tides(body), Err(ParseError));
     }
 
-    #[test]
-    fn flat_top_counts_once() {
-        let body = br#"{"hourly":{"time":[0,3600,7200,10800,14400],
-                        "sea_level_height_msl":[0.0,1.0,1.0,0.0,-1.0]}}"#;
-        let turns = parse_tides(body).unwrap();
-        assert_eq!(
-            turns,
-            [TideTurn {
-                kind: TideKind::High,
-                at_s: 5400
-            }]
-        );
+    #[rstest]
+    #[case::coast(SAN_FRANCISCO, TideSupport::Available)]
+    #[case::inland(DENVER, TideSupport::Unavailable)]
+    #[case::only_a_high(
+        br#"{"hourly":{"time":[0,3600,7200],"sea_level_height_msl":[0.0,1.0,0.0]}}"#,
+        TideSupport::Unavailable
+    )]
+    #[case::unreadable(b"not json", TideSupport::Unknown)]
+    fn support(#[case] body: &[u8], #[case] expected: TideSupport) {
+        assert_eq!(support_from(body), expected);
     }
 
-    #[test]
-    fn next_high_and_low_after_now() {
+    // The recorded forecast's first turns, in PST: 22:34 high, 03:15 low,
+    // 09:18 high, 16:30 low.
+    #[rstest]
+    #[case::before_the_forecast(0, Some(1_794_206_040), Some(1_794_222_900))]
+    #[case::morning(1_794_240_000, Some(1_794_244_725), Some(1_794_270_600))]
+    #[case::exactly_at_a_high_takes_the_next(
+        1_794_244_725,
+        Some(1_794_295_286),
+        Some(1_794_270_600)
+    )]
+    #[case::past_the_forecast(i64::MAX, None, None)]
+    fn next_high_and_low(#[case] now_s: i64, #[case] high: Option<i64>, #[case] low: Option<i64>) {
         let turns = parse_tides(SAN_FRANCISCO).unwrap();
-        // 2026-11-09 08:00 PST: the 09:18 high, then the 16:30 low.
-        let next = next_tides(&turns, 1_794_240_000);
-        assert_eq!(next.high, Some(1_794_244_725));
-        assert_eq!(next.low, Some(1_794_270_600));
-        // Past the end of the forecast.
-        let after = next_tides(&turns, i64::MAX);
-        assert_eq!((after.high, after.low), (None, None));
+        assert_eq!(next_tides(&turns, now_s), NextTides { high, low });
     }
 }

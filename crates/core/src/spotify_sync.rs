@@ -409,6 +409,7 @@ impl SpotifySync {
 mod tests {
     use super::*;
     use alloc::vec;
+    use rstest::rstest;
 
     const TOKEN_OK: &[u8] = include_bytes!("../tests/fixtures/spotify_token_ok.json");
     const TOKEN_NO_REFRESH: &[u8] =
@@ -565,23 +566,35 @@ mod tests {
         assert_eq!(s.next(100), Next::Wait(400));
     }
 
-    #[test]
-    fn command_failures_are_reported() {
+    #[rstest]
+    #[case::premium_required(Ok(Response::new(403, &b""[..])), CommandFailure::PremiumRequired)]
+    #[case::no_active_device(Ok(Response::new(404, &b""[..])), CommandFailure::NoActiveDevice)]
+    #[case::rate_limited(Ok(Response::new(429, &b""[..])), CommandFailure::Other)]
+    #[case::server_error(Ok(Response::new(500, &b""[..])), CommandFailure::Other)]
+    #[case::network_error(Err(NetworkError), CommandFailure::Other)]
+    fn command_failures_are_reported(#[case] outcome: Outcome, #[case] failure: CommandFailure) {
         let mut s = signed_in();
         s.command(Command::Play);
         expect_send(&mut s, 0);
-        let out = reply(&mut s, 0, Ok(Response::new(403, &b""[..])));
         assert_eq!(
-            out,
-            vec![Output::CommandFailed(CommandFailure::PremiumRequired)]
+            reply(&mut s, 0, outcome),
+            vec![Output::CommandFailed(failure)]
         );
-        s.command(Command::Play);
+        // Polling carries on afterwards.
+        assert_eq!(expect_send(&mut s, 0).url, spotify::CURRENTLY_PLAYING_URL);
+    }
+
+    #[test]
+    fn unauthorized_command_refreshes_then_retries() {
+        let mut s = signed_in();
         expect_send(&mut s, 0);
-        let out = reply(&mut s, 0, Ok(Response::new(404, &b""[..])));
-        assert_eq!(
-            out,
-            vec![Output::CommandFailed(CommandFailure::NoActiveDevice)]
-        );
+        reply(&mut s, 0, Ok(Response::new(204, &b""[..])));
+        s.command(Command::Next);
+        expect_send(&mut s, 100);
+        assert!(reply(&mut s, 100, Ok(Response::new(401, &b""[..]))).is_empty());
+        assert_eq!(expect_send(&mut s, 100).url, auth::TOKEN_URL);
+        reply(&mut s, 100, Ok(Response::new(200, TOKEN_NO_REFRESH)));
+        assert!(expect_send(&mut s, 100).url.ends_with("/me/player/next"));
     }
 
     #[test]

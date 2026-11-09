@@ -139,10 +139,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn every_icon_file_parses() {
-        for icon in [
+    #[rstest]
+    fn every_icon_file_parses(
+        #[values(
             Icon::Sun,
             Icon::Cloud,
             Icon::Fog,
@@ -158,9 +159,24 @@ mod tests {
             Icon::Music,
             Icon::Stale,
             Icon::TideHigh,
-            Icon::TideLow,
-        ] {
-            assert!(icon.size().width > 0, "{icon:?}");
-        }
+            Icon::TideLow
+        )]
+        icon: Icon,
+    ) {
+        let size = icon.size();
+        assert!(size.width > 0 && size.height > 0);
+        // Small enough to sit on the 64×64 panel at 2× scale.
+        assert!(size.width <= 32 && size.height <= 32, "{size:?}");
+    }
+
+    #[rstest]
+    #[case::sun(weather::Icon::Sun, Icon::Sun)]
+    #[case::cloud(weather::Icon::Cloud, Icon::Cloud)]
+    #[case::fog(weather::Icon::Fog, Icon::Fog)]
+    #[case::rain(weather::Icon::Rain, Icon::Rain)]
+    #[case::snow(weather::Icon::Snow, Icon::Snow)]
+    #[case::storm(weather::Icon::Storm, Icon::Storm)]
+    fn weather_icons_map_to_their_files(#[case] weather: weather::Icon, #[case] icon: Icon) {
+        assert_eq!(Icon::from(weather), icon);
     }
 }

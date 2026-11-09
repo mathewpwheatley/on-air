@@ -26,33 +26,31 @@ pub fn offset_s(zone: &TimeZone, unix_s: i64) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn zone(name: &str) -> TimeZone {
         find(name).unwrap_or_else(|| panic!("zone {name}"))
     }
 
-    /// Transition instants checked against Python's zoneinfo.
-    #[test]
-    fn daylight_saving_transitions_2026() {
-        let cases = [
-            ("America/Los_Angeles", 1_772_963_999, -28_800),
-            ("America/Los_Angeles", 1_772_964_000, -25_200),
-            ("America/Los_Angeles", 1_793_523_599, -25_200),
-            ("America/Los_Angeles", 1_793_523_600, -28_800),
-            ("Europe/Berlin", 1_774_745_999, 3_600),
-            ("Europe/Berlin", 1_774_746_000, 7_200),
-            ("Australia/Sydney", 1_775_318_399, 39_600),
-            ("Australia/Sydney", 1_775_318_400, 36_000),
-            ("Asia/Kolkata", 1_775_318_400, 19_800),
-            ("Asia/Kathmandu", 1_775_318_400, 20_700),
-        ];
-        for (name, unix_s, expected) in cases {
-            assert_eq!(
-                offset_s(&zone(name), unix_s),
-                Some(expected),
-                "{name} at {unix_s}"
-            );
-        }
+    /// Transition instants checked against Python's zoneinfo: the last
+    /// second before each change and the first second after it.
+    #[rstest]
+    #[case::los_angeles_before_spring("America/Los_Angeles", 1_772_963_999, -28_800)]
+    #[case::los_angeles_after_spring("America/Los_Angeles", 1_772_964_000, -25_200)]
+    #[case::los_angeles_before_fall("America/Los_Angeles", 1_793_523_599, -25_200)]
+    #[case::los_angeles_after_fall("America/Los_Angeles", 1_793_523_600, -28_800)]
+    #[case::berlin_before_spring("Europe/Berlin", 1_774_745_999, 3_600)]
+    #[case::berlin_after_spring("Europe/Berlin", 1_774_746_000, 7_200)]
+    #[case::sydney_before_fall("Australia/Sydney", 1_775_318_399, 39_600)]
+    #[case::sydney_after_fall("Australia/Sydney", 1_775_318_400, 36_000)]
+    #[case::kolkata_half_hour("Asia/Kolkata", 1_775_318_400, 19_800)]
+    #[case::kathmandu_quarter_hour("Asia/Kathmandu", 1_775_318_400, 20_700)]
+    fn daylight_saving_transitions_2026(
+        #[case] name: &str,
+        #[case] unix_s: i64,
+        #[case] expected: i32,
+    ) {
+        assert_eq!(offset_s(&zone(name), unix_s), Some(expected));
     }
 
     #[test]
@@ -66,9 +64,14 @@ mod tests {
         assert_eq!(t.weekday(), jiff::civil::Weekday::Sunday);
     }
 
+    #[rstest]
+    fn unknown_zone_is_none(#[values("Mars/Olympus_Mons", "", "america/los_angeles ")] name: &str) {
+        assert!(find(name).is_none());
+    }
+
     #[test]
-    fn unknown_zone_is_none() {
-        assert!(find("Mars/Olympus_Mons").is_none());
-        assert!(find("").is_none());
+    fn time_out_of_range_is_none() {
+        assert_eq!(local_time(&TimeZone::UTC, i64::MAX), None);
+        assert_eq!(offset_s(&TimeZone::UTC, i64::MIN), None);
     }
 }

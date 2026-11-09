@@ -195,7 +195,10 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::{fixture, rstest};
 
+    /// Every field set to something other than its default.
+    #[fixture]
     fn sample() -> Settings {
         Settings {
             wifi_ssid: "Home".into(),
@@ -216,46 +219,70 @@ mod tests {
         }
     }
 
-    #[test]
-    fn round_trips() {
-        let s = sample();
-        let bytes = s.to_bytes();
+    #[rstest]
+    #[case::defaults(Settings::default())]
+    #[case::every_field_set(sample())]
+    fn round_trips(#[case] settings: Settings) {
+        let bytes = settings.to_bytes();
         assert_eq!(bytes[0], SCHEMA_VERSION);
-        assert_eq!(Settings::from_bytes(&bytes), Ok(s));
+        assert_eq!(Settings::from_bytes(&bytes), Ok(settings));
+    }
+
+    #[rstest]
+    #[case::empty(Vec::new(), SettingsError::UnknownVersion)]
+    #[case::future_version(vec![99, 1, 2], SettingsError::UnknownVersion)]
+    #[case::truncated(
+        { let mut b = sample().to_bytes(); b.truncate(b.len() / 2); b },
+        SettingsError::Corrupt,
+    )]
+    #[case::version_only(vec![SCHEMA_VERSION], SettingsError::Corrupt)]
+    fn rejects_bad_blobs(#[case] bytes: Vec<u8>, #[case] error: SettingsError) {
+        assert_eq!(Settings::from_bytes(&bytes), Err(error));
     }
 
     #[test]
-    fn rejects_empty_unknown_and_corrupt() {
-        assert_eq!(
-            Settings::from_bytes(&[]),
-            Err(SettingsError::UnknownVersion)
-        );
-        assert_eq!(
-            Settings::from_bytes(&[99, 1, 2]),
-            Err(SettingsError::UnknownVersion)
-        );
-        let mut bytes = sample().to_bytes();
-        bytes.truncate(bytes.len() / 2);
-        assert_eq!(Settings::from_bytes(&bytes), Err(SettingsError::Corrupt));
-    }
-
-    #[test]
-    fn idle_time_defaults_to_five_minutes_and_stays_in_range() {
+    fn idle_time_defaults_to_five_minutes() {
         assert_eq!(Settings::default().idle_after_ms(), 5 * 60_000);
-        let mut s = sample();
-        s.idle_after_min = 0;
-        assert_eq!(s.idle_after_ms(), 60_000);
-        s.idle_after_min = 99;
-        assert_eq!(s.idle_after_ms(), 30 * 60_000);
     }
 
-    #[test]
-    fn completeness() {
-        assert!(!Settings::default().has_wifi());
-        assert!(sample().is_complete());
-        let mut s = sample();
-        s.spotify_refresh_token = None;
-        assert!(s.has_wifi() && !s.is_complete());
+    #[rstest]
+    #[case::below_range(0, 1)]
+    #[case::shortest(1, 1)]
+    #[case::longest(30, 30)]
+    #[case::above_range(99, 30)]
+    fn idle_time_stays_in_range(mut sample: Settings, #[case] minutes: u8, #[case] kept: u64) {
+        sample.idle_after_min = minutes;
+        assert_eq!(sample.idle_after_ms(), kept * 60_000);
+    }
+
+    #[rstest]
+    #[case::everything(|_: &mut Settings| {}, true, true)]
+    #[case::no_wifi(|s: &mut Settings| s.wifi_ssid.clear(), false, false)]
+    #[case::no_client_id(|s: &mut Settings| s.spotify_client_id.clear(), true, false)]
+    #[case::not_signed_in(|s: &mut Settings| s.spotify_refresh_token = None, true, false)]
+    fn completeness(
+        mut sample: Settings,
+        #[case] change: fn(&mut Settings),
+        #[case] has_wifi: bool,
+        #[case] complete: bool,
+    ) {
+        change(&mut sample);
+        assert_eq!(sample.has_wifi(), has_wifi);
+        assert_eq!(sample.is_complete(), complete);
+    }
+
+    #[rstest]
+    #[case::available(|_: &mut Settings| {}, true)]
+    #[case::not_checked_yet(|s: &mut Settings| s.tides = TideSupport::Unknown, false)]
+    #[case::no_tide_data(|s: &mut Settings| s.tides = TideSupport::Unavailable, false)]
+    #[case::no_city(|s: &mut Settings| s.weather = None, false)]
+    fn tides_need_a_city_with_tide_data(
+        mut sample: Settings,
+        #[case] change: fn(&mut Settings),
+        #[case] tides: bool,
+    ) {
+        change(&mut sample);
+        assert_eq!(sample.has_tides(), tides);
     }
 
     fn cycle_from(start: IdleMode, tides: bool) -> Vec<IdleMode> {
@@ -270,71 +297,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn idle_mode_cycle_includes_tides_only_when_available() {
-        assert_eq!(
-            cycle_from(IdleMode::AnalogClock, true),
-            [
-                IdleMode::AnalogClock,
-                IdleMode::DigitalClock,
-                IdleMode::Weather,
-                IdleMode::ClockWeather,
-                IdleMode::WeatherTides,
-                IdleMode::LastSong,
-                IdleMode::Off
-            ]
-        );
-        assert_eq!(
-            cycle_from(IdleMode::AnalogClock, false),
-            [
-                IdleMode::AnalogClock,
-                IdleMode::DigitalClock,
-                IdleMode::Weather,
-                IdleMode::ClockWeather,
-                IdleMode::LastSong,
-                IdleMode::Off
-            ]
-        );
-        assert_eq!(
-            IdleMode::cycle(true),
-            cycle_from(IdleMode::AnalogClock, true)
-        );
-        assert_eq!(
-            IdleMode::cycle(false),
-            cycle_from(IdleMode::AnalogClock, false)
-        );
+    #[rstest]
+    #[case::with_tides(true, &[
+        IdleMode::AnalogClock,
+        IdleMode::DigitalClock,
+        IdleMode::Weather,
+        IdleMode::ClockWeather,
+        IdleMode::WeatherTides,
+        IdleMode::LastSong,
+        IdleMode::Off,
+    ])]
+    #[case::without_tides(false, &[
+        IdleMode::AnalogClock,
+        IdleMode::DigitalClock,
+        IdleMode::Weather,
+        IdleMode::ClockWeather,
+        IdleMode::LastSong,
+        IdleMode::Off,
+    ])]
+    fn mode_cycle(#[case] tides: bool, #[case] expected: &[IdleMode]) {
+        assert_eq!(cycle_from(IdleMode::AnalogClock, tides), expected);
+        assert_eq!(IdleMode::cycle(tides), expected);
+    }
+
+    #[rstest]
+    #[case::tides_shown_with_data(IdleMode::WeatherTides, true, IdleMode::WeatherTides)]
+    #[case::tides_fall_back_to_weather(IdleMode::WeatherTides, false, IdleMode::Weather)]
+    #[case::others_unchanged(IdleMode::DigitalClock, false, IdleMode::DigitalClock)]
+    fn shown_screen(#[case] mode: IdleMode, #[case] tides: bool, #[case] shown: IdleMode) {
+        assert_eq!(mode.shown(tides), shown);
     }
 
     #[test]
-    fn tide_screen_falls_back_to_weather_without_tides() {
-        assert_eq!(IdleMode::WeatherTides.shown(true), IdleMode::WeatherTides);
-        assert_eq!(IdleMode::WeatherTides.shown(false), IdleMode::Weather);
-        // Mode from the fallback carries on as if from weather.
+    fn mode_from_the_weather_fallback_carries_on_as_if_from_weather() {
         assert_eq!(IdleMode::WeatherTides.next(false), IdleMode::ClockWeather);
-        assert_eq!(IdleMode::DigitalClock.shown(false), IdleMode::DigitalClock);
     }
 
-    #[test]
-    fn weather_and_tide_screens() {
-        for m in [
-            IdleMode::Weather,
-            IdleMode::ClockWeather,
-            IdleMode::WeatherTides,
-        ] {
-            assert!(m.shows_weather(), "{m:?}");
-        }
-        assert!(!IdleMode::DigitalClock.shows_weather() && !IdleMode::Off.shows_weather());
-        assert!(IdleMode::WeatherTides.shows_tides() && !IdleMode::Weather.shows_tides());
-    }
-
-    #[test]
-    fn tides_need_a_city_with_tide_data() {
-        assert!(sample().has_tides());
-        let mut s = sample();
-        s.tides = TideSupport::Unknown;
-        assert!(!s.has_tides());
-        let mut s = sample();
-        s.weather = None;
-        assert!(!s.has_tides());
+    #[rstest]
+    #[case::analog_clock(IdleMode::AnalogClock, false, false)]
+    #[case::digital_clock(IdleMode::DigitalClock, false, false)]
+    #[case::weather(IdleMode::Weather, true, false)]
+    #[case::clock_weather(IdleMode::ClockWeather, true, false)]
+    #[case::weather_tides(IdleMode::WeatherTides, true, true)]
+    #[case::last_song(IdleMode::LastSong, false, false)]
+    #[case::off(IdleMode::Off, false, false)]
+    fn what_each_screen_needs(#[case] mode: IdleMode, #[case] weather: bool, #[case] tides: bool) {
+        assert_eq!(mode.shows_weather(), weather);
+        assert_eq!(mode.shows_tides(), tides);
     }
 }

@@ -136,94 +136,38 @@ pub fn respect_retry_after(delay_ms: u32, retry_after_s: Option<u32>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     const MINUTE: u64 = 60_000;
 
-    #[test]
-    fn playing_polls_every_5s_mid_track() {
-        let s = PollState::Playing {
-            progress_ms: 10_000,
+    fn playing(progress_ms: u32) -> PollState {
+        PollState::Playing {
+            progress_ms,
             duration_ms: 200_000,
-        };
-        assert_eq!(next_poll_ms(s, MINUTE), 5_000);
+        }
     }
 
-    #[test]
-    fn playing_polls_just_after_track_end() {
-        let s = PollState::Playing {
-            progress_ms: 197_000,
-            duration_ms: 200_000,
-        };
-        assert_eq!(next_poll_ms(s, MINUTE), 3_750);
+    fn stopped(for_ms: u64) -> PollState {
+        PollState::NotPlaying { for_ms }
     }
 
-    #[test]
-    fn never_faster_than_min_even_past_the_end() {
-        let s = PollState::Playing {
-            progress_ms: 200_500,
-            duration_ms: 200_000,
-        };
-        assert_eq!(next_poll_ms(s, MINUTE), MIN_POLL_MS);
-    }
-
-    #[test]
-    fn not_playing_slows_down_once_idle() {
-        assert_eq!(
-            next_poll_ms(PollState::NotPlaying { for_ms: 0 }, MINUTE),
-            5_000
-        );
-        assert_eq!(
-            next_poll_ms(PollState::NotPlaying { for_ms: 59_999 }, MINUTE),
-            5_000
-        );
-        assert_eq!(
-            next_poll_ms(PollState::NotPlaying { for_ms: 60_000 }, MINUTE),
-            30_000
-        );
-    }
-
-    #[test]
-    fn idle_time_comes_from_the_setting() {
-        let ten_minutes = 10 * MINUTE;
-        let s = |for_ms| PollState::NotPlaying { for_ms };
-        assert_eq!(next_poll_ms(s(9 * MINUTE), ten_minutes), 5_000);
-        assert_eq!(next_poll_ms(s(ten_minutes), ten_minutes), 30_000);
-        // With the longest idle time, deep idle still starts once idle.
-        let thirty_minutes = 30 * MINUTE;
-        assert_eq!(next_poll_ms(s(thirty_minutes - 1), thirty_minutes), 5_000);
-        assert_eq!(next_poll_ms(s(thirty_minutes), thirty_minutes), 60_000);
-    }
-
-    #[test]
-    fn long_idle_slows_down_further() {
-        let thirty_minutes = 30 * 60_000;
-        assert_eq!(
-            next_poll_ms(
-                PollState::NotPlaying {
-                    for_ms: thirty_minutes - 1
-                },
-                MINUTE,
-            ),
-            30_000
-        );
-        assert_eq!(
-            next_poll_ms(
-                PollState::NotPlaying {
-                    for_ms: thirty_minutes
-                },
-                MINUTE,
-            ),
-            60_000
-        );
-        assert_eq!(
-            next_poll_ms(
-                PollState::NotPlaying {
-                    for_ms: 12 * 60 * 60_000
-                },
-                MINUTE,
-            ),
-            60_000
-        );
+    #[rstest]
+    #[case::mid_track(playing(10_000), MINUTE, 5_000)]
+    #[case::just_after_track_end(playing(197_000), MINUTE, 3_750)]
+    #[case::never_faster_than_min_past_the_end(playing(200_500), MINUTE, MIN_POLL_MS)]
+    #[case::just_stopped(stopped(0), MINUTE, 5_000)]
+    #[case::stopped_not_idle_yet(stopped(59_999), MINUTE, 5_000)]
+    #[case::idle(stopped(MINUTE), MINUTE, 30_000)]
+    #[case::idle_before_deep_idle(stopped(30 * MINUTE - 1), MINUTE, 30_000)]
+    #[case::deep_idle(stopped(30 * MINUTE), MINUTE, 60_000)]
+    #[case::overnight(stopped(12 * 60 * MINUTE), MINUTE, 60_000)]
+    #[case::ten_minute_setting_not_idle_yet(stopped(9 * MINUTE), 10 * MINUTE, 5_000)]
+    #[case::ten_minute_setting_idle(stopped(10 * MINUTE), 10 * MINUTE, 30_000)]
+    // With the longest idle time, deep idle still starts once idle.
+    #[case::thirty_minute_setting_not_idle_yet(stopped(30 * MINUTE - 1), 30 * MINUTE, 5_000)]
+    #[case::thirty_minute_setting_idle(stopped(30 * MINUTE), 30 * MINUTE, 60_000)]
+    fn poll_interval(#[case] state: PollState, #[case] idle_after_ms: u64, #[case] expected: u32) {
+        assert_eq!(next_poll_ms(state, idle_after_ms), expected);
     }
 
     fn track(id: &str, playing: bool, progress_ms: u32) -> NowPlaying {
@@ -251,40 +195,54 @@ mod tests {
         assert_eq!(f.after_poll(Some(&track("b", true, 300))), None);
     }
 
-    #[test]
-    fn follow_up_gives_up_after_the_last_quick_poll() {
-        let before = track("a", true, 0);
-        let mut f = FollowUp::new(Command::Next, Some(&before));
-        let delays: Vec<_> = (0..6).map(|_| f.after_poll(Some(&before))).collect();
+    #[rstest]
+    fn follow_up_gives_up_after_the_last_quick_poll(
+        #[values(Command::Play, Command::Pause, Command::Next, Command::Previous)] command: Command,
+    ) {
+        // Whatever the button, a poll that shows no change keeps going
+        // until the quick polls run out.
+        let before = track("a", command == Command::Pause, 0);
+        let unchanged = track("a", command == Command::Pause, 0);
+        let mut f = FollowUp::new(command, Some(&before));
+        let delays: Vec<_> = (0..6).map(|_| f.after_poll(Some(&unchanged))).collect();
         assert_eq!(
             delays,
             [Some(600), Some(1_000), Some(1_500), Some(2_000), None, None]
         );
     }
 
-    #[test]
-    fn previous_partway_through_restarts_the_same_song() {
-        let before = track("a", true, 90_000);
-        let mut f = FollowUp::new(Command::Previous, Some(&before));
-        assert_eq!(f.after_poll(Some(&track("a", true, 500))), None);
+    #[rstest]
+    #[case::next_to_a_new_song(
+        Command::Next,
+        track("a", true, 60_000),
+        Some(track("b", true, 300))
+    )]
+    #[case::previous_restarts_the_same_song(
+        Command::Previous,
+        track("a", true, 90_000),
+        Some(track("a", true, 500))
+    )]
+    #[case::play_starts(Command::Play, track("a", false, 1_000), Some(track("a", true, 1_200)))]
+    #[case::pause_stops(
+        Command::Pause,
+        track("a", true, 1_000),
+        Some(track("a", false, 1_000))
+    )]
+    #[case::pause_with_nothing_left(Command::Pause, track("a", true, 1_000), None)]
+    fn follow_up_ends_once_the_change_shows(
+        #[case] command: Command,
+        #[case] before: NowPlaying,
+        #[case] after: Option<NowPlaying>,
+    ) {
+        let mut f = FollowUp::new(command, Some(&before));
+        assert_eq!(f.after_poll(after.as_ref()), None);
     }
 
-    #[test]
-    fn play_and_pause_wait_for_the_playing_state() {
-        let paused = track("a", false, 1_000);
-        let mut f = FollowUp::new(Command::Play, Some(&paused));
-        assert_eq!(f.after_poll(Some(&paused)), Some(600));
-        assert_eq!(f.after_poll(Some(&track("a", true, 1_200))), None);
-
-        let playing = track("a", true, 1_000);
-        let mut f = FollowUp::new(Command::Pause, Some(&playing));
-        assert_eq!(f.after_poll(None), None);
-    }
-
-    #[test]
-    fn retry_after_wins_when_longer() {
-        assert_eq!(respect_retry_after(5_000, Some(20)), 20_000);
-        assert_eq!(respect_retry_after(5_000, Some(1)), 5_000);
-        assert_eq!(respect_retry_after(5_000, None), 5_000);
+    #[rstest]
+    #[case::longer_wins(Some(20), 20_000)]
+    #[case::shorter_ignored(Some(1), 5_000)]
+    #[case::none(None, 5_000)]
+    fn retry_after(#[case] retry_after_s: Option<u32>, #[case] expected: u32) {
+        assert_eq!(respect_retry_after(5_000, retry_after_s), expected);
     }
 }

@@ -63,6 +63,7 @@ impl Backoff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn doubles_then_caps() {
@@ -76,14 +77,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn jitter_stays_in_upper_half_of_window() {
-        let mut b = Backoff::wifi();
-        for r in [0, 1, 7, 12_345, u32::MAX] {
-            b.reset();
-            let d = b.next_delay_ms(r);
-            assert!((500..=1_000).contains(&d), "{d}");
-        }
+    #[rstest]
+    fn jitter_stays_in_upper_half_of_window(#[values(0, 1, 7, 12_345, u32::MAX)] random: u32) {
+        let delay = Backoff::wifi().next_delay_ms(random);
+        assert!((500..=1_000).contains(&delay), "{delay}");
     }
 
     #[test]

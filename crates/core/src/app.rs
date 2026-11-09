@@ -357,6 +357,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     const ART: Screen = Screen::Art { dimmed: false };
     const DIM: Screen = Screen::Art { dimmed: true };
@@ -548,59 +549,42 @@ mod tests {
         assert_eq!(app.view(end).screen, ART);
     }
 
-    #[test]
-    fn play_button_toggles_based_on_state() {
+    /// A playback button sends its command and shows its icon briefly.
+    #[rstest]
+    #[case::play_while_paused(false, Button::PlayPause, Command::Play, Notice::Play)]
+    #[case::pause_while_playing(true, Button::PlayPause, Command::Pause, Notice::Pause)]
+    #[case::next(true, Button::Next, Command::Next, Notice::Next)]
+    #[case::previous(true, Button::Previous, Command::Previous, Notice::Previous)]
+    fn playback_buttons(
+        #[case] playing: bool,
+        #[case] button: Button,
+        #[case] command: Command,
+        #[case] notice: Notice,
+    ) {
         let mut app = online(IdleMode::DigitalClock);
-        app.handle(track(true), 0);
-        assert_eq!(
-            app.handle(tap(Button::PlayPause), 10),
-            Some(Action::Spotify(Command::Pause))
-        );
-        assert_eq!(app.view(10).notice, Some(Notice::Pause));
-        assert_eq!(app.view(510).notice, None);
-
-        app.handle(track(false), 1_000);
-        assert_eq!(
-            app.handle(tap(Button::PlayPause), 1_010),
-            Some(Action::Spotify(Command::Play))
-        );
-        assert_eq!(app.view(1_010).notice, Some(Notice::Play));
+        app.handle(track(playing), 0);
+        assert_eq!(app.handle(tap(button), 10), Some(Action::Spotify(command)));
+        assert_eq!(app.view(10).notice, Some(notice));
+        assert_eq!(app.view(10 + FEEDBACK_MS).notice, None);
     }
 
-    #[test]
-    fn next_and_previous() {
+    #[rstest]
+    #[case::portal(InputEvent::OpenPortal, Action::OpenPortal)]
+    #[case::factory_reset(InputEvent::FactoryReset, Action::FactoryReset)]
+    fn holds_become_actions(#[case] input: InputEvent, #[case] action: Action) {
         let mut app = online(IdleMode::DigitalClock);
-        assert_eq!(
-            app.handle(tap(Button::Next), 0),
-            Some(Action::Spotify(Command::Next))
-        );
-        assert_eq!(app.view(0).notice, Some(Notice::Next));
-        assert_eq!(
-            app.handle(tap(Button::Previous), 0),
-            Some(Action::Spotify(Command::Previous))
-        );
-        assert_eq!(app.view(0).notice, Some(Notice::Previous));
+        assert_eq!(app.handle(Event::Input(input), 0), Some(action));
     }
 
-    #[test]
-    fn holds_become_actions() {
+    #[rstest]
+    #[case::premium(CommandFailure::PremiumRequired, Notice::PremiumNeeded)]
+    #[case::no_device(CommandFailure::NoActiveDevice, Notice::NoDevice)]
+    #[case::other(CommandFailure::Other, Notice::Error)]
+    fn command_failures_show_a_notice(#[case] failure: CommandFailure, #[case] notice: Notice) {
         let mut app = online(IdleMode::DigitalClock);
-        assert_eq!(
-            app.handle(Event::Input(InputEvent::OpenPortal), 0),
-            Some(Action::OpenPortal)
-        );
-        assert_eq!(
-            app.handle(Event::Input(InputEvent::FactoryReset), 0),
-            Some(Action::FactoryReset)
-        );
-    }
-
-    #[test]
-    fn command_failures_show_a_notice() {
-        let mut app = online(IdleMode::DigitalClock);
-        app.handle(Event::CommandFailed(CommandFailure::PremiumRequired), 0);
-        assert_eq!(app.view(1_999).notice, Some(Notice::PremiumNeeded));
-        assert_eq!(app.view(2_000).notice, None);
+        app.handle(Event::CommandFailed(failure), 0);
+        assert_eq!(app.view(NOTICE_MS - 1).notice, Some(notice));
+        assert_eq!(app.view(NOTICE_MS).notice, None);
     }
 
     #[test]

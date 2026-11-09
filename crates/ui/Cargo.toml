@@ -15,4 +15,5 @@ tinybmp = "0.7"
 u8g2-fonts = { version = "0.8", features = ["embedded_graphics_textstyle"] }
 
 [dev-dependencies]
+rstest.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }

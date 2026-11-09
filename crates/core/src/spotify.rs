@@ -255,6 +255,7 @@ pub fn parse_command_response(status: u16, retry_after: Option<&str>) -> Command
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn playing(body: &[u8]) -> NowPlaying {
         match parse_player_response(200, None, body) {
@@ -334,73 +335,95 @@ mod tests {
         assert_eq!(np.art_url, None);
     }
 
-    #[test]
-    fn ad_without_item_is_nothing() {
-        let body = include_bytes!("../tests/fixtures/spotify_ad_no_item.json");
-        assert_eq!(
-            parse_player_response(200, None, body),
-            PlayerResponse::Nothing
-        );
+    fn image(url: &str, size: Option<u32>) -> RawImage {
+        RawImage {
+            url: url.into(),
+            width: size,
+            height: size,
+        }
     }
 
-    #[test]
-    fn status_codes() {
-        assert_eq!(
-            parse_player_response(204, None, b""),
-            PlayerResponse::Nothing
-        );
-        assert_eq!(
-            parse_player_response(401, None, b""),
-            PlayerResponse::Unauthorized
-        );
-        assert_eq!(
-            parse_player_response(429, Some(" 12 "), b""),
-            PlayerResponse::RateLimited { retry_after_s: 12 }
-        );
-        assert_eq!(
-            parse_player_response(429, None, b""),
-            PlayerResponse::RateLimited { retry_after_s: 30 }
-        );
-        assert_eq!(
-            parse_player_response(502, None, b""),
-            PlayerResponse::Failed { status: 502 }
-        );
-        assert_eq!(
-            parse_player_response(200, None, b"{oops"),
-            PlayerResponse::Failed { status: 200 }
-        );
+    #[rstest]
+    #[case::exactly_64(vec![image("640", Some(640)), image("64", Some(64))], Some("64"))]
+    #[case::smallest_big_enough(
+        vec![image("640", Some(640)), image("300", Some(300)), image("32", Some(32))],
+        Some("300"),
+    )]
+    #[case::all_too_small_takes_largest(
+        vec![image("16", Some(16)), image("32", Some(32))],
+        Some("32"),
+    )]
+    #[case::sizes_unknown(vec![image("only", None)], Some("only"))]
+    #[case::no_images(vec![], None)]
+    fn cover_choice(#[case] images: Vec<RawImage>, #[case] expected: Option<&str>) {
+        assert_eq!(pick_image(&images), expected);
     }
 
-    #[test]
-    fn retry_after_is_clamped() {
-        assert_eq!(parse_retry_after(Some("0")), 1);
-        assert_eq!(parse_retry_after(Some("99999")), 3600);
-        assert_eq!(parse_retry_after(Some("soon")), 30);
+    #[rstest]
+    #[case::ad_without_item(
+        200,
+        None,
+        include_bytes!("../tests/fixtures/spotify_ad_no_item.json"),
+        PlayerResponse::Nothing,
+    )]
+    #[case::nothing_playing(204, None, b"", PlayerResponse::Nothing)]
+    #[case::unauthorized(401, None, b"", PlayerResponse::Unauthorized)]
+    #[case::rate_limited(
+        429,
+        Some(" 12 "),
+        b"",
+        PlayerResponse::RateLimited { retry_after_s: 12 },
+    )]
+    #[case::rate_limited_without_header(
+        429,
+        None,
+        b"",
+        PlayerResponse::RateLimited { retry_after_s: 30 },
+    )]
+    #[case::server_error(502, None, b"", PlayerResponse::Failed { status: 502 })]
+    #[case::unreadable(200, None, b"{oops", PlayerResponse::Failed { status: 200 })]
+    fn player_responses(
+        #[case] status: u16,
+        #[case] retry_after: Option<&str>,
+        #[case] body: &[u8],
+        #[case] expected: PlayerResponse,
+    ) {
+        assert_eq!(parse_player_response(status, retry_after, body), expected);
     }
 
-    #[test]
-    fn commands() {
-        assert_eq!(
-            Command::Pause.request(),
-            (Method::Put, "https://api.spotify.com/v1/me/player/pause")
-        );
-        assert_eq!(Command::Next.request().0, Method::Post);
-        assert_eq!(parse_command_response(204, None), CommandResult::Ok);
-        assert_eq!(
-            parse_command_response(403, None),
-            CommandResult::PremiumRequired
-        );
-        assert_eq!(
-            parse_command_response(404, None),
-            CommandResult::NoActiveDevice
-        );
-        assert_eq!(
-            parse_command_response(401, None),
-            CommandResult::Unauthorized
-        );
-        assert_eq!(
-            parse_command_response(429, Some("5")),
-            CommandResult::RateLimited { retry_after_s: 5 }
-        );
+    #[rstest]
+    #[case::too_short(Some("0"), 1)]
+    #[case::too_long(Some("99999"), 3600)]
+    #[case::not_a_number(Some("soon"), 30)]
+    #[case::missing(None, 30)]
+    fn retry_after_is_clamped(#[case] header: Option<&str>, #[case] expected: u32) {
+        assert_eq!(parse_retry_after(header), expected);
+    }
+
+    #[rstest]
+    #[case::play(Command::Play, Method::Put, "play")]
+    #[case::pause(Command::Pause, Method::Put, "pause")]
+    #[case::next(Command::Next, Method::Post, "next")]
+    #[case::previous(Command::Previous, Method::Post, "previous")]
+    fn command_requests(#[case] command: Command, #[case] method: Method, #[case] path: &str) {
+        let expected = alloc::format!("https://api.spotify.com/v1/me/player/{path}");
+        assert_eq!(command.request(), (method, expected.as_str()));
+    }
+
+    #[rstest]
+    #[case::ok(200, None, CommandResult::Ok)]
+    #[case::accepted(202, None, CommandResult::Ok)]
+    #[case::no_content(204, None, CommandResult::Ok)]
+    #[case::unauthorized(401, None, CommandResult::Unauthorized)]
+    #[case::premium_required(403, None, CommandResult::PremiumRequired)]
+    #[case::no_active_device(404, None, CommandResult::NoActiveDevice)]
+    #[case::rate_limited(429, Some("5"), CommandResult::RateLimited { retry_after_s: 5 })]
+    #[case::server_error(500, None, CommandResult::Failed { status: 500 })]
+    fn command_responses(
+        #[case] status: u16,
+        #[case] retry_after: Option<&str>,
+        #[case] expected: CommandResult,
+    ) {
+        assert_eq!(parse_command_response(status, retry_after), expected);
     }
 }
