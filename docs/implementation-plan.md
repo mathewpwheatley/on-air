@@ -60,6 +60,11 @@ on-air/
 | `schedule` | Pure functions that return the next poll delay: 5 s playing, 30 s idle, an extra poll at track end from `progress_ms` / `duration_ms`, and `Retry-After`. | S-3, S-4, N-1 |
 | `backoff` | One exponential-backoff type with jitter, shared by WiFi (max 60 s), Spotify and weather (max 15 min). | N-3, W-5 |
 | `weather` | Open-Meteo forecast and geocoding models, WMO code to icon mapping, and the 2 h staleness check. | W-1, W-3, W-4, D-12 |
+| `tide` | Open-Meteo marine heights to high and low tide times, and the city's tide check. | W-6, W-7 |
+| `weather_sync` | The weather and tides loop without the network, like `spotify_sync`: fetches the forecast every 15 min and tides every 6 h, only for the selected idle screen, retries an unknown tide check, and backs off on errors. | W-2, W-5–W-7 |
+| `wifi` | The WiFi state machine without the radio: Connecting, Online, Lost and Portal. Falls back to the setup hotspot when the saved network can't be joined within 30 s at boot, and retries a dropped connection with backoff. | P-1, N-3, §6.2 |
+| `frame` | Turns each drawn frame into what the panel shows: cover crossfade, gamma, current cap and brightness in one step. | D-4, D-8 |
+| `supervisor` | Task check-ins, and whether to feed the hardware watchdog. | N-4 |
 | `app` | The main state machine. Takes events (playback update, button, tick, weather, network status) and returns the screen to show. Covers playing, paused, idle and status, the idle timer (owner setting, default 5 min), the idle-screen cycle and the mode-tap preview. | D-5–D-7, D-6 diagram |
 | `input` | Button debounce (`debouncr`), tap and hold detection (Mode 5 s, Mode + Play 10 s). Knob smoothing, hysteresis, perceptual curve and the 5% floor. | §3.5, P-6 |
 | `image` | JPEG decode wrapper (`zune-jpeg`), downscale fallback, gamma table, crossfade blend, current estimate and brightness cap. | D-2–D-4, D-8 |
@@ -83,16 +88,16 @@ Each screen is a function `draw(&ScreenModel, &mut impl DrawTarget<Color = Rgb88
 |---|---|
 | `main.rs` | Init clocks, PSRAM heap (`esp-alloc`), Embassy, then spawn tasks. |
 | `board.rs` | Pin map for the MatrixPortal S3: HUB75 pins, A0–A4 to GPIO numbers. One place to change. |
-| `display_task` | Owns `esp-hub75` and two framebuffers. Runs the `app` state machine from core, renders with `on-air-ui`, applies gamma, brightness and the current cap. |
+| `display_task` | Owns `esp-hub75` and two framebuffers. Runs the `app` state machine from core, renders with `on-air-ui`, then passes each frame through `core::frame::FramePipeline` for the crossfade, gamma, brightness and current cap. |
 | `input_task` | Samples the knob at 20 Hz and polls buttons. Feeds `core::input` and sends events. |
-| `net/wifi` | WiFi state machine (Connecting, Online, Lost, Portal) on `esp-radio` + `embassy-net`. |
+| `net/wifi` | Runs `core::wifi::WifiLink` on `esp-radio` + `embassy-net`: joins or starts the hotspot when it asks, and reports joins and drops. |
 | `net/http` | One HTTPS client wrapper (`reqwless` + chosen TLS) with pinned root CAs and streamed reads. |
 | `net/sntp` | Time sync at boot and every few hours. |
 | `spotify_task` | Runs `core::spotify_sync::SpotifySync`: sends each request it asks for with `reqwless`, waits on the command channel between polls, and saves rotated refresh tokens to `storage`. |
-| `weather_task` | Geocoding once, forecast every 15 min, and only while a weather screen is selected. |
+| `weather_task` | Runs `core::weather_sync::WeatherSync`: sends each request it asks for, passes it the selected idle screen, and saves the city's tide check answer. |
 | `portal/` | Soft AP, captive-portal DNS (`edge-captive`), and a `picoserve` server that passes each request to `core::portal::Portal` and acts on its events (join WiFi, save, restart). |
 | `storage` | `sequential-storage` on the `settings` partition. Writes only when a value changes, to limit flash wear. |
-| `supervisor` | Every task reports a heartbeat. The supervisor feeds the hardware watchdog only while all heartbeats are fresh, so one stuck task still triggers a reset. |
+| `supervisor` | Every task checks in with `core::supervisor::Supervisor`. The watchdog is fed only while every task has checked in recently, so one stuck task still triggers a reset. |
 
 **Task communication:**
 - `Channel<Command>` for playback commands (input to Spotify).
@@ -262,6 +267,8 @@ Each phase lists its tasks and when it counts as done.
 - **Soak test:** run for 48 h, unplugging the router a few times and blocking Spotify.
 
 **Done when:** it survives the soak test with no manual reboot, and every requirement in requirements.md is checked off.
+
+**Done early, on the host (2026-11-09):** the logic behind the crossfade, backoff and watchdog lives in core and is tested: `frame` (crossfade, gamma, current cap), `wifi` (connect, reconnect and hotspot fallback), `weather_sync` (weather and tides loop) and `supervisor` (watchdog decisions). The simulator runs `frame`, `wifi` (with a pretend router on the W key) and `weather_sync`. The firmware still has to wire them to the hardware.
 
 ## 4. Testing
 

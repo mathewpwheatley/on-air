@@ -381,11 +381,7 @@ impl SpotifySync {
     }
 
     fn retry_delay(&mut self) -> u64 {
-        // xorshift32: enough randomness to spread out retries.
-        self.random ^= self.random << 13;
-        self.random ^= self.random >> 17;
-        self.random ^= self.random << 5;
-        self.backoff.next_delay_ms(self.random) as u64
+        self.backoff.next_delay_from(&mut self.random) as u64
     }
 
     fn set_online(&mut self, online: bool, emit: &mut impl FnMut(Output)) {

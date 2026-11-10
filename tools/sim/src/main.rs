@@ -6,11 +6,11 @@ mod http_client;
 mod live;
 mod messages;
 mod portal;
-mod tides;
 mod weather;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -21,12 +21,15 @@ use embedded_graphics_simulator::{
     OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent, Window,
 };
 use on_air_core::app::{Action, App, Event, NetStatus, Playback};
+use on_air_core::frame::FramePipeline;
+use on_air_core::image::DEFAULT_POWER;
 use on_air_core::input::{ADC_MAX, Buttons, DEFAULT_FLOOR, InputEvent, Knob, POLL_INTERVAL_MS};
 use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, IdleMode, Settings, WeatherLocation};
 use on_air_core::spotify::NowPlaying;
 use on_air_core::tide::{self, TideSupport, TideTurn};
 use on_air_core::timezone::{self, TimeZone};
 use on_air_core::weather::{Reading, STALE_AFTER_S, Units};
+use on_air_core::wifi::{WifiEvent, WifiLink, WifiNext};
 use on_air_ui::{Framebuffer, HEIGHT, Scene, TideTimes, Track, WIDTH, WeatherInfo};
 
 use messages::{Control, Update};
@@ -37,7 +40,7 @@ Keys:
   4  Mode (hold 5 s: setup portal)
   1+4 held 10 s    factory reset
   - / +            brightness knob down / up (hold to repeat)
-  W  toggle WiFi lost    S  toggle Spotify sign-in needed
+  W  turn the pretend WiFi router off / on    S  toggle Spotify sign-in needed
   N  stop playback (fake player)    Esc  leave the setup portal
 Setup portal: hold 4 for 5 s (or start with --portal), then use http://127.0.0.1:8080";
 
@@ -176,31 +179,29 @@ fn main() {
         let tx = update_tx.clone();
         std::thread::spawn(move || fake::run(tx, control_rx));
     }
-    let (weather_generation, weather_counter) = weather::Generation::first();
-    match args.city.clone() {
-        Some(city) => {
-            let units = if args.fahrenheit {
-                Units::Fahrenheit
-            } else {
-                Units::Celsius
-            };
-            let tx = update_tx.clone();
-            std::thread::spawn(move || weather::run(city, units, tx, weather_generation));
-        }
-        None => {
-            weather::fake(update_tx.clone());
-            tides::fake(update_tx.clone());
-        }
-    }
-    // Kept for the setup portal, which starts later.
-    let portal_updates = update_tx;
-    let mut portal_started = false;
-
     let mut units = if args.fahrenheit {
         Units::Fahrenheit
     } else {
         Units::Celsius
     };
+    // Tells the weather thread which idle screen is selected, since it only
+    // fetches what that screen needs. `None` with fake weather.
+    let mut weather_idle_mode = IdleMode::DigitalClock;
+    let mut weather_controls: Option<Sender<IdleMode>> = match args.city.clone() {
+        Some(city) => Some(weather::start_city(
+            city,
+            units,
+            weather_idle_mode,
+            update_tx.clone(),
+        )),
+        None => {
+            weather::fake(update_tx.clone());
+            None
+        }
+    };
+    // Kept for the setup portal, which starts later.
+    let portal_updates = update_tx;
+    let mut portal_started = false;
     let mut clock_24h = args.clock_24h;
     let mut weather_location = portal_settings(&args, units, clock_24h).weather;
     let mut zone = args
@@ -221,6 +222,8 @@ fn main() {
     let mut window = Window::new("On-Air", &settings);
     let mut display = SimulatorDisplay::<Rgb888>::new(Size::new(WIDTH, HEIGHT));
     let mut framebuffer = Framebuffer::new();
+    let mut pipeline = FramePipeline::for_screen(DEFAULT_POWER);
+    let mut shown = vec![0u8; (WIDTH * HEIGHT * 3) as usize];
 
     let start = Instant::now();
     // A made-up MAC address; the device uses its real one.
@@ -233,21 +236,21 @@ fn main() {
     let mut knob_position: i32 = ADC_MAX as i32 * 3 / 4;
     let mut brightness: u8 = 255;
     let mut pressed = [false; 4];
+
+    // The real WiFi state machine, joining a pretend router that W turns
+    // off and on. A join takes half a second.
+    let mut router_up = true;
+    let mut wifi = WifiLink::new(true, 0, random_u32());
+    let mut join_done_at: Option<u64> = None;
     if args.portal {
-        app.handle(Event::Net(NetStatus::Portal), 0);
-        portal_started = true;
-        let settings = portal_settings(&args, units, clock_24h);
-        portal::start(
-            settings,
-            setup_network.clone(),
-            portal_updates.clone(),
-            !args.no_browser,
-        );
+        wifi.open_portal();
     }
+    // What Spotify last said, so an outage shows the "No WiFi" badge too.
+    let mut spotify_online: Option<bool> = None;
+    let mut shown_net: Option<NetStatus> = None;
     let mut art: Option<Vec<u8>> = None;
     let mut weather: Option<(Reading, Instant)> = None;
     let mut tide_turns: Vec<TideTurn> = Vec::new();
-    let mut no_wifi = false;
     let mut sign_in_needed = false;
 
     loop {
@@ -287,13 +290,11 @@ fn main() {
                     }
                     match keycode {
                         Keycode::W => {
-                            no_wifi = !no_wifi;
-                            let status = if no_wifi {
-                                NetStatus::Lost
-                            } else {
-                                NetStatus::Online
-                            };
-                            app.handle(Event::Net(status), now);
+                            router_up = !router_up;
+                            println!("router {}", if router_up { "on" } else { "off" });
+                            if !router_up && wifi.status() == NetStatus::Online {
+                                wifi.handle(now, WifiEvent::Failed);
+                            }
                         }
                         Keycode::S => {
                             sign_in_needed = !sign_in_needed;
@@ -307,8 +308,10 @@ fn main() {
                         Keycode::N => {
                             let _ = controls.send(Control::StopPlayback);
                         }
+                        // Like finishing setup: restart and join the network.
                         Keycode::ESCAPE => {
-                            app.handle(Event::Net(NetStatus::Online), now);
+                            wifi = WifiLink::new(true, now, random_u32());
+                            join_done_at = None;
                         }
                         _ => {}
                     }
@@ -331,25 +334,15 @@ fn main() {
                         let _ = controls.send(Control::Spotify(command));
                     }
                     Action::SaveIdleMode(mode) => println!("idle screen: {mode:?} (saved)"),
-                    Action::OpenPortal => {
-                        println!("setup portal opened (Esc to leave)");
-                        app.handle(Event::Net(NetStatus::Portal), now);
-                        if !portal_started {
-                            portal_started = true;
-                            let settings = portal_settings(&args, units, clock_24h);
-                            portal::start(
-                                settings,
-                                setup_network.clone(),
-                                portal_updates.clone(),
-                                !args.no_browser,
-                            );
-                        }
-                    }
+                    Action::OpenPortal => wifi.open_portal(),
+                    // Settings are erased, so setup starts over.
                     Action::FactoryReset => {
                         println!("factory reset");
                         app = App::new(IdleMode::DigitalClock);
                         app.set_idle_after_ms(idle_after_ms.load(Ordering::Relaxed));
-                        app.handle(Event::Net(NetStatus::Online), now);
+                        wifi = WifiLink::new(false, now, random_u32());
+                        join_done_at = None;
+                        shown_net = None;
                     }
                 }
             }
@@ -361,15 +354,50 @@ fn main() {
             brightness = level;
         }
 
+        // WiFi.
+        if let Some(at) = join_done_at
+            && now >= at
+        {
+            join_done_at = None;
+            let event = if router_up {
+                WifiEvent::Joined
+            } else {
+                WifiEvent::Failed
+            };
+            println!("wifi: {event:?}");
+            wifi.handle(now, event);
+        }
+        match wifi.next(now) {
+            WifiNext::Join => {
+                println!("wifi: joining");
+                join_done_at = Some(now + 500);
+            }
+            WifiNext::StartPortal => {
+                println!("setup portal opened (Esc to leave)");
+                if !portal_started {
+                    portal_started = true;
+                    let settings = portal_settings(&args, units, clock_24h);
+                    portal::start(
+                        settings,
+                        setup_network.clone(),
+                        portal_updates.clone(),
+                        !args.no_browser,
+                    );
+                }
+            }
+            WifiNext::Wait(_) | WifiNext::Idle => {}
+        }
+
         // Background updates.
         while let Ok(update) = updates.try_recv() {
             match update {
-                Update::Net(status) => {
-                    if !no_wifi {
-                        app.handle(Event::Net(status), now);
+                Update::Net(status) => spotify_online = Some(status == NetStatus::Online),
+                Update::Art(frame) => {
+                    if frame.is_some() {
+                        pipeline.start_crossfade(now);
                     }
+                    art = frame;
                 }
-                Update::Art(frame) => art = frame,
                 Update::NowPlaying(Some(now_playing)) => {
                     let playback = Playback::Track {
                         is_playing: now_playing.is_playing,
@@ -407,33 +435,30 @@ fn main() {
                     }
                     app.set_tides_available(settings.has_tides());
                     // Restart the weather only if the city or units changed.
+                    // Replacing the controls stops the old thread.
                     if settings.weather != weather_location || settings.units != units {
                         units = settings.units;
                         weather_location = settings.weather.clone();
-                        let generation = weather::Generation::next(&weather_counter);
                         weather = None;
                         tide_turns.clear();
-                        if let Some(place) = settings.weather {
-                            // The portal already checked; only fetch where
-                            // there's tide data or the check didn't finish.
-                            if settings.tides != TideSupport::Unavailable {
-                                let (tx, tide_generation) =
-                                    (portal_updates.clone(), generation.clone());
-                                std::thread::spawn(move || {
-                                    tides::run_at(place.lat, place.lon, tx, tide_generation)
-                                });
-                            }
-                            let tx = portal_updates.clone();
-                            std::thread::spawn(move || {
-                                weather::run_at(place.lat, place.lon, units, tx, generation)
-                            });
-                        }
+                        weather_idle_mode = app.idle_mode();
+                        weather_controls = settings.weather.map(|place| {
+                            weather::start_at(
+                                place.lat,
+                                place.lon,
+                                units,
+                                settings.tides,
+                                weather_idle_mode,
+                                portal_updates.clone(),
+                            )
+                        });
                     }
                     println!("display settings applied");
                 }
                 Update::PortalDone => {
                     println!("setup finished");
-                    app.handle(Event::Net(NetStatus::Online), now);
+                    wifi = WifiLink::new(true, now, random_u32());
+                    join_done_at = None;
                 }
                 Update::Timezone(name) => {
                     if args.timezone.is_none()
@@ -442,6 +467,25 @@ fn main() {
                         zone = found;
                     }
                 }
+            }
+        }
+
+        // Network status: WiFi, or Spotify being out of reach while the
+        // WiFi is up.
+        let net = match (wifi.status(), spotify_online) {
+            (NetStatus::Online, Some(false)) => NetStatus::Lost,
+            (status, _) => status,
+        };
+        if shown_net != Some(net) {
+            shown_net = Some(net);
+            app.handle(Event::Net(net), now);
+        }
+
+        // The weather thread follows the selected idle screen.
+        if app.idle_mode() != weather_idle_mode {
+            weather_idle_mode = app.idle_mode();
+            if let Some(controls) = &weather_controls {
+                let _ = controls.send(weather_idle_mode);
             }
         }
 
@@ -478,11 +522,8 @@ fn main() {
             now_ms: now,
         };
         on_air_ui::draw(&scene, &mut framebuffer).expect("framebuffer can't fail");
-        on_air_core::image::scale(framebuffer.as_bytes_mut(), brightness);
-        let colors = framebuffer
-            .as_bytes()
-            .chunks_exact(3)
-            .map(|p| Rgb888::new(p[0], p[1], p[2]));
+        pipeline.render(now, framebuffer.as_bytes(), brightness, &mut shown);
+        let colors = shown.chunks_exact(3).map(|p| Rgb888::new(p[0], p[1], p[2]));
         display
             .fill_contiguous(
                 &Rectangle::new(Point::zero(), Size::new(WIDTH, HEIGHT)),

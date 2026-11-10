@@ -54,6 +54,17 @@ impl Backoff {
         self.attempt
     }
 
+    /// Like [`Backoff::next_delay_ms`], drawing the random number from
+    /// `random`, which is updated for next time. Start it from any nonzero
+    /// seed.
+    pub fn next_delay_from(&mut self, random: &mut u32) -> u32 {
+        // xorshift32: enough randomness to spread out retries.
+        *random ^= *random << 13;
+        *random ^= *random >> 17;
+        *random ^= *random << 5;
+        self.next_delay_ms(*random)
+    }
+
     fn ceiling_ms(&self) -> u32 {
         let grown = (self.base_ms as u64) << self.attempt.min(32);
         grown.min(self.max_ms as u64) as u32

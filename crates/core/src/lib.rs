@@ -11,6 +11,7 @@ extern crate alloc;
 pub mod app;
 pub mod auth;
 pub mod backoff;
+pub mod frame;
 pub mod http;
 pub mod image;
 pub mod input;
@@ -20,9 +21,12 @@ pub mod settings;
 pub mod setup;
 pub mod spotify;
 pub mod spotify_sync;
+pub mod supervisor;
 pub mod tide;
 pub mod timezone;
 pub mod weather;
+pub mod weather_sync;
+pub mod wifi;
 
 /// Encode `key=value&...` for query strings and form bodies.
 pub(crate) fn form_encode(pairs: &[(&str, &str)]) -> alloc::string::String {
