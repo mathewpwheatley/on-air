@@ -8,6 +8,62 @@ A wall-powered 64×64 RGB LED panel that shows the album art of whatever is play
 
 See [docs/requirements.md](docs/requirements.md) for the full spec, bill of materials, wiring and milestones, and [docs/implementation-plan.md](docs/implementation-plan.md) for the software build plan.
 
+## Architecture
+
+All the logic lives in two `no_std` crates that build and test on a Mac. `on-air-core` makes the decisions but never touches the network or hardware: its state machines say which request to send or what to do next, and the host does it and reports back. `on-air-ui` draws every screen. The firmware and the desktop simulator are thin hosts around the same code, so what runs in the simulator is what runs on the panel.
+
+```mermaid
+flowchart LR
+    subgraph outside["Outside"]
+        spotify_api["Spotify Web API"]
+        open_meteo["Open-Meteo<br/>forecast, geocoding, marine"]
+        phone["Owner's phone"]
+    end
+
+    subgraph host["Host: firmware tasks, or simulator threads"]
+        http["HTTP client"]
+        radio["WiFi radio"]
+        controls["Buttons and knob"]
+        server["Setup web server"]
+        output["LED panel, or window"]
+    end
+
+    subgraph core["on-air-core: decisions, no I/O"]
+        spotify_sync["spotify_sync<br/>tokens, polling, covers, commands"]
+        weather_sync["weather_sync<br/>forecast and tides"]
+        wifi["wifi<br/>connect, reconnect, hotspot"]
+        input["input<br/>taps, holds, knob curve"]
+        portal["portal<br/>setup page and forms"]
+        app["app<br/>which screen to show"]
+        frame["frame<br/>crossfade, gamma, current cap"]
+        supervisor["supervisor<br/>watchdog"]
+    end
+
+    subgraph ui["on-air-ui"]
+        screens["Screens<br/>art, clocks, weather, tides, status"]
+    end
+
+    spotify_api <--> http
+    open_meteo <--> http
+    http <-->|requests and replies| spotify_sync
+    http <-->|requests and replies| weather_sync
+    radio <-->|join, hotspot, events| wifi
+    phone <--> server
+    server <--> portal
+    controls --> input
+
+    spotify_sync -- "now playing, cover" --> app
+    weather_sync -- "weather, tides" --> app
+    wifi -- "network status" --> app
+    input -- "taps and holds" --> app
+    app -- "view" --> screens
+    screens -- "drawn frame" --> frame
+    input -- "brightness" --> frame
+    frame --> output
+```
+
+`supervisor` sits beside all of this on the device: each task checks in with it, and it feeds the hardware watchdog only while every task is responsive.
+
 ## Development setup
 
 One-time setup on macOS:
@@ -44,4 +100,4 @@ Day to day:
 
 ## Status
 
-P0–P2 done: scaffolding, core logic, screens and the simulator. Next is P3, panel bring-up on real hardware.
+P0–P2 done: scaffolding, core logic, screens and the simulator. Also done early on the host: the setup portal, and the logic for WiFi, weather and tides, crossfades and the watchdog. Next is P3, panel bring-up on real hardware.
