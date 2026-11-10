@@ -90,15 +90,11 @@ where
         draw_screen(scene, target)?;
     }
     if scene.view.no_wifi {
-        // In the top-right corner, with the LEDs behind it and a 1 px border
-        // turned off so it reads on bright covers.
-        let icon = icons::Icon::NoWifi.size();
-        let corner = Point::new(WIDTH as i32 - icon.width as i32 - 2, 0);
-        target.fill_solid(
-            &Rectangle::new(corner, icon + Size::new(2, 2)),
-            Rgb888::BLACK,
-        )?;
-        icons::draw(icons::Icon::NoWifi, corner + Point::new(1, 1), 1, target)?;
+        // In the top-right corner, outlined in black so it reads on bright
+        // covers, with room for the outline at the edges.
+        let width = icons::Icon::NoWifi.size().width as i32;
+        let at = Point::new(WIDTH as i32 - width - 1, 1);
+        icons::draw_outlined(icons::Icon::NoWifi, at, 1, target)?;
     }
     match scene.view.notice {
         Some(Notice::TrackInfo) => screens::track_info::draw(scene, target)?,
