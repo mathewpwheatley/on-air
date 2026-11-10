@@ -90,12 +90,15 @@ where
         draw_screen(scene, target)?;
     }
     if scene.view.no_wifi {
-        // Turn the LEDs behind the badge off so it reads on bright covers.
+        // In the top-right corner, with the LEDs behind it and a 1 px border
+        // turned off so it reads on bright covers.
+        let icon = icons::Icon::NoWifi.size();
+        let corner = Point::new(WIDTH as i32 - icon.width as i32 - 2, 0);
         target.fill_solid(
-            &Rectangle::new(Point::new(54, 0), Size::new(10, 10)),
+            &Rectangle::new(corner, icon + Size::new(2, 2)),
             Rgb888::BLACK,
         )?;
-        icons::draw(icons::Icon::NoWifi, Point::new(55, 1), 1, target)?;
+        icons::draw(icons::Icon::NoWifi, corner + Point::new(1, 1), 1, target)?;
     }
     match scene.view.notice {
         Some(Notice::TrackInfo) => screens::track_info::draw(scene, target)?,

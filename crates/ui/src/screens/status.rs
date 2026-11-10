@@ -9,7 +9,8 @@ use crate::text::{self, Align, DIM, GREY, SMALL, TINY, WHITE};
 const QR_VERSION: Version = Version::new(3);
 const QR_BUFFER: usize = QR_VERSION.buffer_len();
 
-/// QR code for joining the open setup network, with its name underneath.
+/// QR code for joining the open setup network, with a WiFi icon and its
+/// name underneath.
 pub fn setup<D>(network: &str, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
@@ -72,11 +73,22 @@ where
         }
     }
 
+    // The WiFi icon before the name, so it reads as a network to join.
+    // Together they're centered under the QR code.
+    const GAP: i32 = 2;
+    let icon_size = Icon::Wifi.size();
+    let left = 32 - (icon_size.width as i32 + GAP + text::width(&SMALL, network) as i32) / 2;
+    icons::draw(
+        Icon::Wifi,
+        Point::new(left, 64 - icon_size.height as i32),
+        1,
+        target,
+    )?;
     text::draw(
         &SMALL,
         network,
-        Point::new(32, 60),
-        Align::Center,
+        Point::new(left + icon_size.width as i32 + GAP, 60),
+        Align::Left,
         WHITE,
         target,
     )?;
