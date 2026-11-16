@@ -10,8 +10,10 @@ pub use crate::http::Method;
 /// `market=from_token` drops the long `available_markets` lists, which keeps
 /// responses small. `additional_types=episode` includes podcasts.
 pub const CURRENTLY_PLAYING_URL: &str = "https://api.spotify.com/v1/me/player/currently-playing?market=from_token&additional_types=episode";
-/// Preferred cover size.
-pub const ART_SIZE: u32 = 64;
+/// Preferred cover size. Shrinking Spotify's 300 px cover with our box filter
+/// looks sharper on the panel than Spotify's own 64 px version, and decodes
+/// to 270 KB rather than 1.2 MB for the 640 px one.
+pub const ART_SIZE: u32 = 300;
 /// Used when a 429 has no usable `Retry-After`.
 pub const DEFAULT_RETRY_AFTER_S: u32 = 30;
 
@@ -169,13 +171,10 @@ fn join_names(artists: &[RawArtist]) -> String {
     out
 }
 
-/// Pick the cover to download: exactly 64 px if offered, else the
-/// smallest that's at least 64 px, else the largest available.
+/// Pick the cover to download: the smallest that's at least [`ART_SIZE`],
+/// else the largest available.
 fn pick_image(images: &[RawImage]) -> Option<&str> {
     let size = |img: &RawImage| img.width.zip(img.height).map(|(w, h)| w.min(h));
-    if let Some(img) = images.iter().find(|i| size(i) == Some(ART_SIZE)) {
-        return Some(&img.url);
-    }
     let smallest_big_enough = images
         .iter()
         .filter_map(|i| size(i).filter(|&s| s >= ART_SIZE).map(|s| (s, i)))
@@ -265,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn track_playing_picks_64px_cover() {
+    fn track_playing_picks_300px_cover() {
         let np = playing(include_bytes!(
             "../tests/fixtures/spotify_track_playing.json"
         ));
@@ -279,7 +278,7 @@ mod tests {
                 is_playing: true,
                 progress_ms: 61_234,
                 duration_ms: 222_973,
-                art_url: Some("https://i.scdn.co/image/ab67616d00004851aaaa".into()),
+                art_url: Some("https://i.scdn.co/image/ab67616d00001e02aaaa".into()),
             }
         );
     }
@@ -301,14 +300,14 @@ mod tests {
                 progress_ms: 395,
                 duration_ms: 256_423,
                 art_url: Some(
-                    "https://i.scdn.co/image/ab67616d00004851f33072178773789a4c2b8110".into()
+                    "https://i.scdn.co/image/ab67616d00001e02f33072178773789a4c2b8110".into()
                 ),
             }
         );
     }
 
     #[test]
-    fn paused_track_without_64px_picks_smallest_big_enough() {
+    fn paused_track_with_two_artists() {
         let np = playing(include_bytes!(
             "../tests/fixtures/spotify_track_paused_two_artists.json"
         ));
@@ -325,7 +324,8 @@ mod tests {
         assert_eq!(np.title, "Episode 42");
         assert_eq!(np.artist, "A Podcast");
         assert_eq!(np.album, None);
-        assert_eq!(np.art_url.as_deref(), Some("https://i.scdn.co/image/ep64"));
+        // No 300 px version, so the next size up.
+        assert_eq!(np.art_url.as_deref(), Some("https://i.scdn.co/image/ep640"));
     }
 
     #[test]
@@ -344,14 +344,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::exactly_64(vec![image("640", Some(640)), image("64", Some(64))], Some("64"))]
-    #[case::smallest_big_enough(
-        vec![image("640", Some(640)), image("300", Some(300)), image("32", Some(32))],
+    #[case::spotify_sizes(
+        vec![image("640", Some(640)), image("300", Some(300)), image("64", Some(64))],
         Some("300"),
     )]
+    #[case::smallest_big_enough(
+        vec![image("1000", Some(1000)), image("640", Some(640)), image("64", Some(64))],
+        Some("640"),
+    )]
     #[case::all_too_small_takes_largest(
-        vec![image("16", Some(16)), image("32", Some(32))],
-        Some("32"),
+        vec![image("64", Some(64)), image("32", Some(32))],
+        Some("64"),
     )]
     #[case::sizes_unknown(vec![image("only", None)], Some("only"))]
     #[case::no_images(vec![], None)]

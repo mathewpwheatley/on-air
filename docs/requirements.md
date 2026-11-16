@@ -42,7 +42,7 @@ On-Air is a DIY, wall-powered 64×64 RGB LED panel that shows the album art of w
 |---|---|
 | D-1 | Drive a 64×64 HUB75 panel (1/32 scan, A–E address lines) at a refresh rate of at least 100 Hz with no visible flicker. |
 | D-2 | Render a 64×64 RGB888 framebuffer with gamma correction and at least 6 bits per color channel. |
-| D-3 | Fetch and decode the 64×64 JPEG that Spotify provides for each album, so no resizing is needed. If no 64 px image exists, downscale the smallest available. |
+| D-3 | Fetch the 300×300 JPEG that Spotify provides for each album and shrink it to 64×64 with a box filter, which looks sharper on the panel than Spotify's own 64 px image. If no 300 px image exists, use the smallest larger one, else the largest available. |
 | D-4 | Crossfade between covers over about 300 ms. |
 | D-5 | When playback is paused, dim the art to about 40% of the current brightness. |
 | D-6 | Idle screens, cycled with the mode button: **Analog clock**, **Digital clock**, **Weather**, **Clock + weather**, **Weather + tides** (only where the city has tide data, see W-6), **Last song** (the most recent cover stays on screen, dimmed like a paused cover; blank until something has played since power-up), or **None** (panel dark). Each Mode tap first shows "IDLE MODE", the mode's name and a row of position dots for about 2 s. Enter the idle screen after nothing has played for the owner's idle time (set in the portal, 1–30 min, default 5 min), and return to album art as soon as playback starts. The selected screen is saved and survives reboots. |
@@ -367,7 +367,7 @@ The software side of each milestone is broken down in [implementation-plan.md](i
 | R-2 | TLS: `embedded-tls` supports TLS 1.3 only and has limited certificate verification; `esp-mbedtls` is heavier but more complete. | Decide in M2. The device needs `accounts.spotify.com`, `api.spotify.com`, `i.scdn.co`, `api.open-meteo.com` and `geocoding-api.open-meteo.com`. Pin the root CAs. |
 | R-3 | Rust captive-portal crates are young. | Use `edge-captive` for the DNS side and `picoserve` for HTTP; only the form page and sign-in flow are written in-repo. |
 | R-4 | Spotify developer-mode limits: only allowlisted users, possible Premium requirement for the app owner, and future API policy changes. | Personal use only. Document the app setup in the README. |
-| R-5 | Memory: TLS buffers, JSON and JPEG decoding together. | Put the heap in PSRAM, read large responses as streams, and only download the 64 px image. |
+| R-5 | Memory: TLS buffers, JSON and JPEG decoding together. | Put the heap in PSRAM, read large responses as streams, and download the 300 px image (about 20 KB, 270 KB decoded) rather than the 640 px one (1.2 MB decoded). |
 | R-6 | A readable analog clock and weather layout at 64×64 px. | Mock the screens in the host panel simulator (`tools/`) before M5. |
 | Q-1 | Can the MatrixPortal's USB-C input and screw terminals carry about 2.5 A to the panel continuously? Adafruit doesn't publish a rating. | Check the schematic in Adafruit's PCB repo, and check that the board stays cool at the cap during the M0 bench test. Lower the cap if needed. |
 | Q-2 | Pinout and pull-ups on the button board. | Check the board before wiring. |

@@ -54,7 +54,7 @@ on-air/
 | Module | What it holds | Requirements |
 |---|---|---|
 | `auth` | PKCE verifier and challenge (SHA-256 + base64url), authorize-URL builder, callback-URL parser that pulls out `code`, token-response parsing. | S-1, S-7, P-4 |
-| `spotify` | `currently-playing` response model for tracks and podcast episodes. Picks the 64 px image (D-3). Maps status codes to outcomes: 200, 204, 401, 403 (no Premium), 429 with `Retry-After`. | S-3–S-6 |
+| `spotify` | `currently-playing` response model for tracks and podcast episodes. Picks the 300 px image (D-3). Maps status codes to outcomes: 200, 204, 401, 403 (no Premium), 429 with `Retry-After`. | S-3–S-6 |
 | `http` | Plain request and reply types, so core logic can ask for HTTP without doing it. Each host sends them with its own client. | — |
 | `spotify_sync` | The Spotify loop without the network: says which request to send next (token refresh, poll, playback command, cover download), reads each reply and reports what changed. Handles 401, 429, outages, rotated refresh tokens and quick polls after a button. | S-1–S-6 |
 | `schedule` | Pure functions that return the next poll delay: 5 s playing, 30 s idle, an extra poll at track end from `progress_ms` / `duration_ms`, and `Retry-After`. | S-3, S-4, N-1 |
