@@ -43,6 +43,9 @@ pub struct Scene<'a> {
     pub track: Option<Track<'a>>,
     /// Setup network name, shown on the setup screen.
     pub setup_network: &'a str,
+    /// The board's Spotify sign-in page on the home network, shown as a QR
+    /// code while sign-in is needed.
+    pub sign_in_url: Option<&'a str>,
     /// Any monotonic clock, for scrolling text and blinking.
     pub now_ms: u64,
 }
@@ -121,7 +124,7 @@ where
         Screen::Idle(mode) => screens::idle::draw(mode, scene, target),
         Screen::Setup => screens::status::setup(scene.setup_network, target),
         Screen::Connecting => screens::status::connecting(scene.now_ms, target),
-        Screen::SignInNeeded => screens::status::sign_in_needed(target),
+        Screen::SignInNeeded => screens::status::sign_in_needed(scene.sign_in_url, target),
     }
 }
 

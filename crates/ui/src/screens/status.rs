@@ -40,38 +40,7 @@ where
     }
     let payload = core::str::from_utf8(&payload[..len]).unwrap_or("");
 
-    let mut temp = [0u8; QR_BUFFER];
-    let mut out = [0u8; QR_BUFFER];
-    if let Ok(qr) = QrCode::encode_text(
-        payload,
-        &mut temp,
-        &mut out,
-        QrCodeEcc::Low,
-        Version::MIN,
-        QR_VERSION,
-        None,
-        true,
-    ) {
-        let modules = qr.size();
-        let scale = if modules * 2 + 4 <= 56 { 2 } else { 1 };
-        let side = modules * scale + 2 * scale; // one-module quiet zone each side
-        let origin = Point::new((64 - side) / 2, (56 - side) / 2);
-        target.fill_solid(
-            &Rectangle::new(origin, Size::new(side as u32, side as u32)),
-            WHITE,
-        )?;
-        for y in 0..modules {
-            for x in 0..modules {
-                if qr.get_module(x, y) {
-                    let at = origin + Point::new((x + 1) * scale, (y + 1) * scale);
-                    target.fill_solid(
-                        &Rectangle::new(at, Size::new(scale as u32, scale as u32)),
-                        Rgb888::BLACK,
-                    )?;
-                }
-            }
-        }
-    }
+    draw_qr(payload, 56, target)?;
 
     // The WiFi icon before the name, so it reads as a network to join.
     // Together they're centered under the QR code.
@@ -120,10 +89,67 @@ where
     Ok(())
 }
 
-pub fn sign_in_needed<D>(target: &mut D) -> Result<(), D::Error>
+/// A QR code for `payload`, centered in the top `height` rows, at 2× when
+/// it fits.
+fn draw_qr<D>(payload: &str, height: i32, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
+    let mut temp = [0u8; QR_BUFFER];
+    let mut out = [0u8; QR_BUFFER];
+    let Ok(qr) = QrCode::encode_text(
+        payload,
+        &mut temp,
+        &mut out,
+        QrCodeEcc::Low,
+        Version::MIN,
+        QR_VERSION,
+        None,
+        true,
+    ) else {
+        return Ok(());
+    };
+    let modules = qr.size();
+    let scale = if modules * 2 + 4 <= height { 2 } else { 1 };
+    let side = modules * scale + 2 * scale; // one-module quiet zone each side
+    let origin = Point::new((64 - side) / 2, (height - side) / 2);
+    target.fill_solid(
+        &Rectangle::new(origin, Size::new(side as u32, side as u32)),
+        WHITE,
+    )?;
+    for y in 0..modules {
+        for x in 0..modules {
+            if qr.get_module(x, y) {
+                let at = origin + Point::new((x + 1) * scale, (y + 1) * scale);
+                target.fill_solid(
+                    &Rectangle::new(at, Size::new(scale as u32, scale as u32)),
+                    Rgb888::BLACK,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Spotify isn't signed in. With `url` (the board's sign-in page on the home
+/// network), a QR code to scan with a phone on the same WiFi; without it,
+/// how to reach setup.
+pub fn sign_in_needed<D>(url: Option<&str>, target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    if let Some(url) = url {
+        draw_qr(url, 56, target)?;
+        text::draw(
+            &TINY,
+            "SPOTIFY SIGN IN",
+            Point::new(32, 61),
+            Align::Center,
+            WHITE,
+            target,
+        )?;
+        return Ok(());
+    }
     icons::draw_centered(Icon::Music, 32, 6, 2, target)?;
     text::draw(
         &SMALL,

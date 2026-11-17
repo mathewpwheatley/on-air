@@ -95,7 +95,7 @@ async fn main(spawner: Spawner) -> ! {
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");
     let rng = Rng::new();
-    static NET_RESOURCES: StaticCell<StackResources<6>> = StaticCell::new();
+    static NET_RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
     let net_seed = (rng.random() as u64) << 32 | rng.random() as u64;
     let (stack, net_runner) = embassy_net::new(
         interfaces.station,
@@ -122,7 +122,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(wifi_task::net_task(setup_runner).expect("setup net task already running"));
     spawner.spawn(setup_network::dhcp_task(setup_stack).expect("DHCP task already running"));
     spawner.spawn(setup_network::dns_task(setup_stack).expect("DNS task already running"));
-    let portal = setup_network::PortalShared::new(
+    let portal = setup_network::PortalShared::setup(
         settings.settings.clone(),
         setup_network_name,
         store,
@@ -130,6 +130,21 @@ async fn main(spawner: Spawner) -> ! {
     );
     for _ in 0..3 {
         spawner.spawn(setup_network::web_task(setup_stack, portal).expect("too many web tasks"));
+    }
+
+    // The Spotify sign-in page on the home network, only while there's no
+    // sign-in to use (the panel shows its address as a QR code).
+    let sign_in_open = settings.settings.spotify_refresh_token.is_none()
+        && (settings.from_portal || config::SPOTIFY_REFRESH_TOKEN.is_none());
+    if sign_in_open {
+        let home = setup_network::PortalShared::home(
+            settings.settings.clone(),
+            setup_network_name,
+            store,
+            https_client,
+        );
+        spawner.spawn(setup_network::web_task(stack, home).expect("too many web tasks"));
+        info!("spotify: not signed in; sign-in page open on the home network");
     }
 
     spawner.spawn(
@@ -163,8 +178,14 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.DMA_CH0,
     );
     spawner.spawn(
-        display_task::display_task(hub75, spare_frame, setup_network_name, settings)
-            .expect("display task already running"),
+        display_task::display_task(
+            hub75,
+            spare_frame,
+            setup_network_name,
+            settings,
+            sign_in_open.then_some(stack),
+        )
+        .expect("display task already running"),
     );
 
     // After WiFi start-up and the display's first frame have allocated.

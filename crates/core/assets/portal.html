@@ -124,7 +124,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
 
   <section id="step-spotify">
     <button class="head" type="button">
-      <span class="step">2</span>
+      <span class="step">1</span>
       <span class="title"><b>Spotify</b><span class="summary">Not signed in</span></span>
       <span class="edit">Edit</span>
     </button>
@@ -149,11 +149,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
           Approve in your browser. It then shows a page that can't load: copy
           that page's address and paste it here.
         </p>
-        <p class="hint">
-          If your phone closes this window, come back by turning off mobile
-          data and opening <b>http://192.168.4.1</b> in your browser, or by
-          rejoining <b class="network-name"></b> in WiFi settings.
-        </p>
+        <p class="hint">Then use your browser's Back button to come back here.</p>
         <textarea id="callback-url" autocapitalize="off" spellcheck="false" placeholder="http://127.0.0.1:8888/callback?code=…"></textarea>
         <button class="action" type="submit">Finish sign-in</button>
         <div class="status" id="finish-status"></div>
@@ -169,7 +165,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
 
   <section id="step-display">
     <button class="head" type="button">
-      <span class="step">3</span>
+      <span class="step">2</span>
       <span class="title"><b>Settings</b><span class="summary"></span></span>
       <span class="edit">Edit</span>
     </button>
@@ -212,7 +208,6 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
   </section>
 
   <section id="finish">
-    <div class="hint">On-Air restarts and starts showing what you're playing.</div>
     <button class="action" id="done" disabled>Finish Setup</button>
     <div class="status" id="done-status"></div>
   </section>
@@ -220,7 +215,20 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
 
 <script>
 const $ = (s) => document.querySelector(s);
-const STEPS = ["#step-wifi", "#step-spotify", "#step-display"];
+// The same page serves two places. On the setup network (`/`) it sets up
+// WiFi and the display. On the home network (`/spotify`, opened from the QR
+// code on the panel) it only signs in to Spotify: a phone on the setup
+// network can't reach Spotify, since Android ties its browser to that
+// network.
+const HOME = location.pathname === "/spotify";
+const STEPS = HOME ? ["#step-spotify"] : ["#step-wifi", "#step-display"];
+for (const id of ["#step-wifi", "#step-spotify", "#step-display", "#finish"]) {
+  if (!STEPS.includes(id) && !(id === "#finish" && !HOME)) $(id).classList.add("hidden");
+}
+if (HOME) {
+  $("h1").textContent = "On-Air: Spotify sign-in";
+  $(".sub").textContent = "Sign in so On-Air can show what you're playing.";
+}
 const state = { wifi: false, ssid: "", spotify: false, city: "", units: "c", clock: "12", idle: 5, tides: "unknown" };
 
 // Why the Weather + Tides screen is or isn't offered, shown under the city.
@@ -279,16 +287,13 @@ function refresh() {
   const note = $("#tide-note");
   note.textContent = state.city ? TIDE_NOTES[state.tides] || "" : "";
   note.classList.toggle("hidden", !note.textContent);
-  $("#connect-spotify").disabled = !state.wifi;
-  if (!state.wifi) setStatus($("#spotify-status"), "Connect WiFi first, so On-Air can reach Spotify.");
-  else if ($("#spotify-status").textContent.startsWith("Connect WiFi")) setStatus($("#spotify-status"), "");
-  $("#done").disabled = !(state.wifi && state.spotify && state.city);
+  $("#done").disabled = !(state.wifi && state.city);
 }
 
 // The first step that still needs doing, or none if setup is complete.
 function nextStep() {
+  if (HOME) return state.spotify ? null : "#step-spotify";
   if (!state.wifi) return "#step-wifi";
-  if (!state.spotify) return "#step-spotify";
   if (!state.city) return "#step-display";
   return null;
 }
@@ -302,8 +307,7 @@ for (const id of STEPS) {
 async function loadStatus() {
   const s = await api("/api/status");
   if (s.ok === false) return;
-  $("#network-name").textContent = s.network_name;
-  document.querySelectorAll(".network-name").forEach((el) => (el.textContent = s.network_name));
+  if (!HOME) $("#network-name").textContent = s.network_name;
   Object.assign(state, {
     wifi: s.wifi === "connected", ssid: s.wifi_ssid, spotify: s.spotify_signed_in,
     city: s.city, units: s.units, clock: s.clock, idle: s.idle_minutes, tides: s.tides,
@@ -427,8 +431,12 @@ $("#spotify-start").addEventListener("submit", (e) => working(e, async () => {
   showPaste(reply.authorize_url);
   $("#callback-url").value = "";
   setStatus($("#finish-status"), "");
-  // Straight to the browser: this window has no internet.
-  if (ANDROID) {
+  // On the home network this browser has internet, so Spotify opens right
+  // here; the Back button returns to this page, which reopens on the paste
+  // box.
+  if (HOME) {
+    location.href = reply.authorize_url;
+  } else if (ANDROID) {
     location.href = outside(reply.authorize_url);
   } else {
     window.open(reply.authorize_url, "_blank");
@@ -462,7 +470,12 @@ $("#spotify-finish").addEventListener("submit", (e) => working(e, async () => {
   $("#spotify-finish").classList.add("hidden");
   state.spotify = true;
   refresh();
-  openStep("#step-display");
+  if (HOME) {
+    setStatus($("#spotify-status"), "Signed in. On-Air restarts and shows your music in a moment. You can close this page.", "ok");
+    $("#spotify-start").querySelector("button").disabled = true;
+  } else {
+    openStep("#step-display");
+  }
 }));
 
 $("#idle-minutes").addEventListener("input", (e) => {

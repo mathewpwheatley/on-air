@@ -103,9 +103,12 @@ pub async fn dns_task(stack: Stack<'static>) -> ! {
     }
 }
 
-/// What the web-server tasks share.
+/// What the web-server tasks share. One for the setup network, and one for
+/// the home network's Spotify sign-in.
 pub struct PortalShared {
     portal: Mutex<CriticalSectionRawMutex, Portal>,
+    /// On the home network: only the Spotify sign-in is open.
+    home: bool,
     store: Option<&'static SettingsStore>,
     client: &'static HttpsClient,
     /// Whether the portal has a network list yet.
@@ -113,25 +116,54 @@ pub struct PortalShared {
 }
 
 impl PortalShared {
-    pub fn new(
+    /// The setup network's portal.
+    pub fn setup(
         settings: Settings,
         network_name: &str,
         store: Option<&'static SettingsStore>,
         client: &'static HttpsClient,
     ) -> &'static PortalShared {
         static SHARED: StaticCell<PortalShared> = StaticCell::new();
-        SHARED.init(PortalShared {
-            portal: Mutex::new(Portal::new(settings, network_name)),
+        SHARED.init(Self::new(settings, network_name, false, store, client))
+    }
+
+    /// The home network's Spotify sign-in.
+    pub fn home(
+        settings: Settings,
+        network_name: &str,
+        store: Option<&'static SettingsStore>,
+        client: &'static HttpsClient,
+    ) -> &'static PortalShared {
+        static SHARED: StaticCell<PortalShared> = StaticCell::new();
+        SHARED.init(Self::new(settings, network_name, true, store, client))
+    }
+
+    fn new(
+        settings: Settings,
+        network_name: &str,
+        home: bool,
+        store: Option<&'static SettingsStore>,
+        client: &'static HttpsClient,
+    ) -> PortalShared {
+        let mut portal = Portal::new(settings, network_name);
+        if home {
+            // It's reached over the home WiFi, so that's connected.
+            portal.set_wifi(on_air_core::portal::WifiState::Connected);
+        }
+        PortalShared {
+            portal: Mutex::new(portal),
+            home,
             store,
             client,
             have_networks: Mutex::new(false),
-        })
+        }
     }
 }
 
 /// One web-server task. Phones open several connections at once, so a few
-/// of these run together.
-#[embassy_executor::task(pool_size = 3)]
+/// of these run on the setup network, and one on the home network while
+/// Spotify sign-in is needed.
+#[embassy_executor::task(pool_size = 4)]
 pub async fn web_task(stack: Stack<'static>, shared: &'static PortalShared) -> ! {
     let mut rx_buffer = [0u8; 2048];
     // The page is about 20 KB; a bigger send buffer means fewer round trips.
@@ -206,13 +238,13 @@ async fn handle(shared: &PortalShared, request: IncomingRequest) -> (Vec<u8>, bo
             portal.set_networks(networks);
         }
         let rng = Rng::new();
-        portal.handle(
-            method,
-            &request.target,
-            &body,
-            &mut |buffer| rng.read(buffer),
-            &mut |event| events.push(event),
-        )
+        let mut random = |buffer: &mut [u8]| rng.read(buffer);
+        let mut emit = |event| events.push(event);
+        if shared.home {
+            portal.handle_home(method, &request.target, &body, &mut random, &mut emit)
+        } else {
+            portal.handle(method, &request.target, &body, &mut random, &mut emit)
+        }
     };
     let reply = match handled {
         Handled::Reply(reply) => reply,
@@ -284,6 +316,21 @@ async fn act(shared: &PortalShared, event: Event) -> bool {
                 .send(WifiCommand::Join { ssid, password })
                 .await;
             false
+        }
+        // From the home network: keep just the sign-in, and restart so the
+        // Spotify task picks it up.
+        Event::SignedIn if shared.home => {
+            let settings = shared.portal.lock().await.settings().clone();
+            if let Some(store) = shared.store {
+                store
+                    .update(|saved| {
+                        saved.spotify_client_id = settings.spotify_client_id;
+                        saved.spotify_refresh_token = settings.spotify_refresh_token;
+                    })
+                    .await;
+            }
+            info!("portal: signed in to Spotify; restarting");
+            true
         }
         Event::SignedIn | Event::SettingsChanged => {
             save(shared).await;

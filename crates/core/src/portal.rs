@@ -23,6 +23,10 @@
 //! | `POST /api/spotify/finish` (form) | [`SignIn::code_from`], exchange the code, save the refresh token |
 //! | `POST /api/display` (form) | [`parse_display`], check a new city for tide data, save, reply [`display_saved_json`] |
 //! | `POST /api/done` | save everything and restart |
+//!
+//! On the home network, [`Portal::handle_home`] answers only the Spotify
+//! sign-in (`GET /spotify`, which serves [`PAGE`], `GET /api/status` and the
+//! two `/api/spotify/…` routes), and only until someone has signed in.
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -422,10 +426,8 @@ pub fn places_json(places: &[Place]) -> String {
 pub fn missing_before_done(settings: &Settings) -> Option<&'static str> {
     if !settings.has_wifi() {
         Some("Connect to your WiFi first (step 1).")
-    } else if settings.spotify_client_id.is_empty() || settings.spotify_refresh_token.is_none() {
-        Some("Sign in to Spotify first (step 2).")
     } else if settings.weather.is_none() {
-        Some("Pick your city first (step 3).")
+        Some("Pick your city first (step 2).")
     } else {
         None
     }
@@ -596,6 +598,36 @@ impl Portal {
     /// Progress joining the home WiFi.
     pub fn set_wifi(&mut self, state: WifiState) {
         self.wifi = state;
+    }
+
+    /// Handle a request from the home network, where the only thing open is
+    /// the Spotify sign-in, and only until someone has signed in. A phone on
+    /// the setup network can't reach Spotify (Android ties its browser to
+    /// that network), so sign-in happens here instead. The rest of the
+    /// portal stays on the setup network. `GET /spotify` serves the portal
+    /// page, which shows only its Spotify step there.
+    pub fn handle_home(
+        &mut self,
+        method: Method,
+        target: &str,
+        body: &str,
+        random: &mut impl FnMut(&mut [u8]),
+        events: &mut impl FnMut(Event),
+    ) -> Handled {
+        let path = target.split('?').next().unwrap_or("");
+        let open = self.settings.spotify_refresh_token.is_none()
+            && matches!(
+                (method, path),
+                (Method::Get, "/spotify")
+                    | (Method::Get, "/api/status")
+                    | (Method::Post, "/api/spotify/start")
+                    | (Method::Post, "/api/spotify/finish")
+            );
+        match (open, path) {
+            (false, _) => Handled::Reply(Reply::NotFound),
+            (true, "/spotify") => Handled::Reply(Reply::Page),
+            (true, _) => self.handle(method, target, body, random, events),
+        }
     }
 
     /// Handle one request. `target` is the path with any query string.
@@ -1370,13 +1402,50 @@ mod tests {
     }
 
     #[test]
-    fn done_needs_wifi_spotify_and_city() {
+    fn home_network_only_opens_the_spotify_sign_in() {
+        let mut portal = Portal::new(Settings::default(), "OnAir-1A2B");
+        let mut events = Vec::new();
+        let mut home = |portal: &mut Portal, method, target: &str, body: &str| {
+            portal.handle_home(method, target, body, &mut random, &mut |e| events.push(e))
+        };
+        assert_eq!(
+            home(&mut portal, Method::Get, "/spotify", ""),
+            Handled::Reply(Reply::Page)
+        );
+        assert!(matches!(
+            home(&mut portal, Method::Post, "/api/spotify/start", "client_id=0123456789abcdef0123456789abcdef"),
+            Handled::Reply(Reply::Json(json)) if json.contains("authorize_url")
+        ));
+        // Nothing else from the portal.
+        for (method, target) in [
+            (Method::Get, "/"),
+            (Method::Get, "/generate_204"),
+            (Method::Get, "/api/networks"),
+            (Method::Post, "/api/wifi"),
+            (Method::Post, "/api/display"),
+            (Method::Post, "/api/done"),
+        ] {
+            assert_eq!(
+                home(&mut portal, method, target, ""),
+                Handled::Reply(Reply::NotFound),
+                "{target}"
+            );
+        }
+        // Once signed in, nothing at all.
+        portal.settings.spotify_refresh_token = Some("rt".into());
+        assert_eq!(
+            home(&mut portal, Method::Get, "/spotify", ""),
+            Handled::Reply(Reply::NotFound)
+        );
+        assert!(events.is_empty());
+    }
+
+    /// Spotify sign-in happens afterwards, from the home network.
+    #[test]
+    fn done_needs_wifi_and_city() {
         let mut settings = Settings::default();
         assert!(missing_before_done(&settings).unwrap().contains("WiFi"));
         settings.wifi_ssid = "Home".into();
-        assert!(missing_before_done(&settings).unwrap().contains("Spotify"));
-        settings.spotify_client_id = "cid".into();
-        settings.spotify_refresh_token = Some("rt".into());
         assert!(missing_before_done(&settings).unwrap().contains("city"));
         settings.weather = Some(WeatherLocation {
             city: "Portland".into(),

@@ -3,9 +3,12 @@
 //! cover crossfade, gamma, the current cap and the brightness.
 
 use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Ticker};
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
@@ -79,6 +82,7 @@ pub async fn display_task(
     mut back: &'static mut PanelFrame,
     setup_network: &'static str,
     settings: &'static Effective,
+    sign_in_stack: Option<Stack<'static>>,
 ) -> ! {
     let settings = &settings.settings;
     let idle_mode = settings.idle_mode;
@@ -103,6 +107,8 @@ pub async fn display_task(
     let mut spotify_reachable: Option<bool> = None;
     let mut shown_net: Option<NetStatus> = None;
     let mut shown_certificate_problem = false;
+    // The sign-in page's address on the home network, for the QR code.
+    let mut sign_in_url: Option<String> = None;
     let mut stats_from = (Instant::now(), hub75.frame_count());
     let mut ticker = Ticker::every(Duration::from_millis(FRAME_MS));
 
@@ -172,6 +178,13 @@ pub async fn display_task(
             app.handle(Event::CertificateProblem(certificate_problem), now);
         }
 
+        if let Some(stack) = sign_in_stack
+            && sign_in_url.is_none()
+            && let Some(config) = stack.config_v4()
+        {
+            sign_in_url = Some(format!("http://{}/spotify", config.address.address()));
+        }
+
         let unix_s = sntp_task::unix_seconds();
         let local = |at: Option<i64>| at.and_then(|s| timezone::local_time(&zone, s));
         let scene = Scene {
@@ -198,6 +211,7 @@ pub async fn display_task(
                 album: t.album.as_deref(),
             }),
             setup_network,
+            sign_in_url: sign_in_url.as_deref(),
             now_ms: now,
         };
         on_air_ui::draw(&scene, &mut *drawn).expect("framebuffer can't fail");

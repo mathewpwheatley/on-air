@@ -164,7 +164,7 @@ Tapping **Mode** while music is playing shows a preview of the next idle screen 
 | N-2 | **Boot:** from power-on to art in under 10 s on a known network. |
 | N-3 | **Resilience:** reconnect automatically after WiFi drops, DNS failures and Spotify outages, with exponential backoff (max 60 s). No manual reboot should ever be needed. |
 | N-4 | **Watchdog:** a hardware watchdog resets the device if the main loop stalls for more than 30 s. |
-| N-5 | **Security:** settings live in a dedicated flash partition. The portal is only reachable on the setup AP, never on the home network. HTTPS to Spotify verifies certificates (see risk R-2). |
+| N-5 | **Security:** settings live in a dedicated flash partition. The portal is only reachable on the setup AP, never on the home network, with one exception: while no Spotify account is signed in, the home network gets the Spotify sign-in page and its two sign-in requests (nothing else), checked against the one-time state value. HTTPS to Spotify verifies certificates (see risk R-2). |
 | N-6 | **Logging:** structured logs over USB serial using `defmt` or `log`. |
 | N-7 | **Testability:** Spotify JSON parsing, the state machine and image handling live in a `no_std` crate with host-side unit tests. |
 

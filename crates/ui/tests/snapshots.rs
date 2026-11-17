@@ -75,6 +75,7 @@ fn base(screen: Screen) -> Scene<'static> {
             album: Some("Hot Fuss"),
         }),
         setup_network: "OnAir-1A2B",
+        sign_in_url: None,
         now_ms: 0,
     }
 }
@@ -237,6 +238,9 @@ type Change = fn(&mut Scene);
 #[case::setup("setup", Screen::Setup, |_: &mut Scene| {})]
 #[case::connecting("connecting", Screen::Connecting, |_: &mut Scene| {})]
 #[case::sign_in_needed("sign_in_needed", Screen::SignInNeeded, |_: &mut Scene| {})]
+#[case::sign_in_needed_qr("sign_in_needed_qr", Screen::SignInNeeded, |s: &mut Scene| {
+    s.sign_in_url = Some("http://192.168.1.17/spotify");
+})]
 // Without tide data there's one dot fewer.
 #[case::mode_weather_without_tides("mode_weather_without_tides", Screen::Idle(IdleMode::Weather), |s: &mut Scene| {
     s.view.notice = Some(Notice::Mode(IdleMode::Weather));

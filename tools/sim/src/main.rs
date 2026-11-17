@@ -519,6 +519,8 @@ fn main() {
                 album: t.album.as_deref(),
             }),
             setup_network: &setup_network,
+            // The simulator signs in from this computer, with --live.
+            sign_in_url: None,
             now_ms: now,
         };
         on_air_ui::draw(&scene, &mut framebuffer).expect("framebuffer can't fail");

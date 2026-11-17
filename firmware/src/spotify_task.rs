@@ -60,7 +60,7 @@ pub async fn spotify_task(
         tokens.push(("build-time", token.into()));
     }
     if client_id.is_empty() || tokens.is_empty() {
-        warn!("spotify: not signed in; sign in from the setup portal");
+        warn!("spotify: not signed in; scan the code on the panel to sign in");
         UPDATES.send(SpotifyUpdate::SignInNeeded).await;
         return;
     }
@@ -74,8 +74,21 @@ pub async fn spotify_task(
         follow(client, store, client_id, &token, seed).await;
         warn!("spotify: Spotify rejected the {source} refresh token");
     }
-    warn!("spotify: signed out; sign in again from the setup portal");
     UPDATES.send(SpotifyUpdate::SignInNeeded).await;
+    // A sign-in from the portal that Spotify no longer accepts: forget it and
+    // restart, which opens the sign-in page and shows its QR code. (Not in
+    // development, where the build's token would just be tried again.)
+    if settings.from_portal
+        && let Some(store) = store
+    {
+        warn!("spotify: signed out; restarting to show the sign-in code");
+        store
+            .update(|saved| saved.spotify_refresh_token = None)
+            .await;
+        Timer::after_secs(3).await;
+        esp_hal::system::software_reset();
+    }
+    warn!("spotify: signed out; sign in again with `just sim --live` and rebuild");
 }
 
 /// Follow Spotify with one refresh token, until Spotify rejects it.
