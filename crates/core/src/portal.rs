@@ -357,7 +357,7 @@ pub struct Network {
 /// left out.
 pub fn networks_json(networks: &[Network]) -> String {
     let mut list: Vec<&Network> = networks.iter().filter(|n| !n.ssid.is_empty()).collect();
-    list.sort_by(|a, b| b.signal.cmp(&a.signal));
+    list.sort_by_key(|n| core::cmp::Reverse(n.signal));
     let mut seen: Vec<&str> = Vec::new();
     list.retain(|n| {
         let new = !seen.contains(&n.ssid.as_str());

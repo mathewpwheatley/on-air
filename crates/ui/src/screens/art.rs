@@ -22,10 +22,12 @@ pub fn draw_at_level<D>(art: &[u8], level: u16, target: &mut D) -> Result<(), D:
 where
     D: DrawTarget<Color = Rgb888>,
 {
-    let colors = art.chunks_exact(3).map(|p| {
-        let s = |v: u8| ((v as u16 * level + 127) / 255) as u8;
-        Rgb888::new(s(p[0]), s(p[1]), s(p[2]))
-    });
+    let s = |v: u8| ((v as u16 * level + 127) / 255) as u8;
+    let colors = art
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|&[r, g, b]| Rgb888::new(s(r), s(g), s(b)));
     target.fill_contiguous(
         &Rectangle::new(Point::zero(), Size::new(WIDTH, HEIGHT)),
         colors,

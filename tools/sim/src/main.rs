@@ -523,7 +523,11 @@ fn main() {
         };
         on_air_ui::draw(&scene, &mut framebuffer).expect("framebuffer can't fail");
         pipeline.render(now, framebuffer.as_bytes(), brightness, &mut shown);
-        let colors = shown.chunks_exact(3).map(|p| Rgb888::new(p[0], p[1], p[2]));
+        let colors = shown
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[r, g, b]| Rgb888::new(r, g, b));
         display
             .fill_contiguous(
                 &Rectangle::new(Point::zero(), Size::new(WIDTH, HEIGHT)),
