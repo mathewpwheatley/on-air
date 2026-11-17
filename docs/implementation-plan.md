@@ -159,7 +159,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P5 Network + TLS | ✅ Done. WiFi, PSRAM, SNTP, TLS to all five hosts, and AP+STA. |
 | P6 Spotify on device | Software done, apart from seeing a token rotation saved. Playback buttons wait on the parts. |
 | P7 Setup portal | Host side done. The device side is not started. |
-| P8 Idle screens | Not started. The screens and weather logic are done on the host. |
+| P8 Idle screens | Weather and tides work on the panel. Saving the idle screen and the preview wait on the Mode button. |
 | P9 Polish | Host side done. The device side is not started. |
 
 ### P0 — Scaffolding (host) ✅
@@ -297,10 +297,12 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 ### P8 — Idle screens on device (M5)
 
-- [ ] Hook the `on-air-ui` idle screens to SNTP time and `weather_task`.
-- [ ] Fetch tide times in `weather_task` while the Weather + tides screen is selected (`core::tide`), and redo the city's tide check while it's still unknown, saving the answer.
-- [ ] Save the selected idle screen.
-- [ ] Mode-tap preview while music is playing.
+- [x] Hook the `on-air-ui` idle screens to SNTP time and `weather_task`.
+- [x] Fetch tide times in `weather_task` while the Weather + tides screen is selected (`core::tide`), and redo the city's tide check while it's still unknown, saving the answer.
+- [ ] Save the selected idle screen. Waits on the Mode button: the display will save on `Action::SaveIdleMode`. Until then `ON_AIR_IDLE_SCREEN` in `.env` picks it.
+- [ ] Mode-tap preview while music is playing. Waits on the Mode button; `core::app` already does it.
+
+**Notes so far (2026-11-16):** `weather_task` runs `core::weather_sync::WeatherSync` with the city from `.env` (`ON_AIR_CITY`, `ON_AIR_FAHRENHEIT`), looked up once and saved with its tide check in the flash settings. The display tells it the selected idle screen through a signal, so nothing is fetched for the clock-only screens. `IdleMode::from_name` reads `ON_AIR_IDLE_SCREEN`, which stands in for the Mode button.
 
 **Done when:** all the idle screens work on the panel, weather and tides refresh on schedule, a city's tide check is saved, and nothing is fetched when no weather screen is selected.
 

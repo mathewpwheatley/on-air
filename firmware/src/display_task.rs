@@ -21,12 +21,15 @@ use on_air_core::frame::FramePipeline;
 use on_air_core::image::{DEFAULT_POWER, FRAME_LEN};
 use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, IdleMode};
 use on_air_core::spotify::NowPlaying;
+use on_air_core::tide::{self, TideSupport, TideTurn};
 use on_air_core::timezone::{self, TimeZone};
-use on_air_ui::{Framebuffer, Scene, Track};
+use on_air_core::weather::{Reading, STALE_AFTER_S};
+use on_air_ui::{Framebuffer, Scene, TideTimes, Track, WeatherInfo};
 use static_cell::ConstStaticCell;
 
 use crate::input_task::BRIGHTNESS;
 use crate::spotify_task::{self, SpotifyUpdate};
+use crate::weather_task::{self, WeatherUpdate};
 use crate::{https, sntp_task, wifi_task};
 
 const COLUMNS: usize = on_air_ui::WIDTH as usize;
@@ -79,6 +82,7 @@ pub async fn display_task(
     hub75: Hub75<Async, PanelFrame>,
     mut back: &'static mut PanelFrame,
     setup_network: &'static str,
+    idle_mode: IdleMode,
 ) -> ! {
     let mut drawn = Box::new(Framebuffer::new());
     let mut shown = vec![0u8; FRAME_LEN];
@@ -88,7 +92,12 @@ pub async fn display_task(
     let clock_24h = matches!(CLOCK_24H, Some("true" | "1"));
     info!("display: timezone {}", TIMEZONE.unwrap_or("UTC"));
 
-    let mut app = App::new(IdleMode::DigitalClock);
+    let units = weather_task::units();
+    let mut app = App::new(idle_mode);
+    info!("display: idle screen {idle_mode:?}");
+    let mut fetching_for: Option<IdleMode> = None;
+    let mut weather: Option<(Reading, Instant)> = None;
+    let mut tide_turns: Vec<TideTurn> = Vec::new();
     app.set_idle_after_ms(DEFAULT_IDLE_AFTER_MIN as u64 * 60_000);
     let mut art: Option<Vec<u8>> = None;
     let mut track: Option<NowPlaying> = None;
@@ -134,6 +143,21 @@ pub async fn display_task(
             }
         }
 
+        while let Ok(update) = weather_task::UPDATES.try_receive() {
+            match update {
+                WeatherUpdate::Weather(reading) => weather = Some((reading, Instant::now())),
+                WeatherUpdate::Tides(turns) => tide_turns = turns,
+                WeatherUpdate::TideSupport(support) => {
+                    app.set_tides_available(support == TideSupport::Available);
+                }
+            }
+        }
+        // The weather task fetches only what the selected idle screen shows.
+        if fetching_for != Some(app.idle_mode()) {
+            fetching_for = Some(app.idle_mode());
+            weather_task::IDLE_MODE.signal(app.idle_mode());
+        }
+
         // WiFi, or Spotify being out of reach while the WiFi is up.
         let net = match (wifi_task::status(), spotify_reachable) {
             (NetStatus::Online, Some(false)) => NetStatus::Lost,
@@ -149,14 +173,26 @@ pub async fn display_task(
             app.handle(Event::CertificateProblem(certificate_problem), now);
         }
 
+        let unix_s = sntp_task::unix_seconds();
+        let local = |at: Option<i64>| at.and_then(|s| timezone::local_time(&zone, s));
         let scene = Scene {
             view: app.view(now),
             art: art.as_deref(),
-            time: sntp_task::unix_seconds().and_then(|s| timezone::local_time(&zone, s)),
+            time: local(unix_s),
             clock_24h,
-            weather: None,
+            weather: weather.map(|(reading, at)| WeatherInfo {
+                reading,
+                stale: at.elapsed().as_secs() > STALE_AFTER_S,
+                units,
+            }),
             tides_available: app.tides_available(),
-            tides: None,
+            tides: unix_s.filter(|_| !tide_turns.is_empty()).map(|unix_s| {
+                let next = tide::next_tides(&tide_turns, unix_s);
+                TideTimes {
+                    high: local(next.high),
+                    low: local(next.low),
+                }
+            }),
             track: track.as_ref().map(|t| Track {
                 title: &t.title,
                 artist: &t.artist,

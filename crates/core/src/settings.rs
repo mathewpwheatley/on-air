@@ -54,6 +54,31 @@ impl IdleMode {
         IdleMode::Off,
     ];
 
+    /// The idle screen with this name, such as `clock_weather`, for
+    /// settings typed by hand. Case and `-` versus `_` don't matter.
+    pub fn from_name(name: &str) -> Option<IdleMode> {
+        let name = name.trim();
+        let is = |wanted: &str| {
+            name.len() == wanted.len()
+                && name
+                    .bytes()
+                    .zip(wanted.bytes())
+                    .all(|(a, b)| a.to_ascii_lowercase() == b || (a == b'-' && b == b'_'))
+        };
+        [
+            ("digital_clock", IdleMode::DigitalClock),
+            ("analog_clock", IdleMode::AnalogClock),
+            ("weather", IdleMode::Weather),
+            ("clock_weather", IdleMode::ClockWeather),
+            ("weather_tides", IdleMode::WeatherTides),
+            ("last_song", IdleMode::LastSong),
+            ("off", IdleMode::Off),
+        ]
+        .into_iter()
+        .find(|(wanted, _)| is(wanted))
+        .map(|(_, mode)| mode)
+    }
+
     /// The idle screens on offer, in Mode-button order. The tide screen is
     /// left out where there's no tide data.
     pub fn cycle(tides: bool) -> &'static [IdleMode] {
@@ -196,6 +221,16 @@ impl Settings {
 mod tests {
     use super::*;
     use rstest::{fixture, rstest};
+
+    #[rstest]
+    #[case::snake("clock_weather", Some(IdleMode::ClockWeather))]
+    #[case::kebab_and_caps("Weather-Tides", Some(IdleMode::WeatherTides))]
+    #[case::padded(" off ", Some(IdleMode::Off))]
+    #[case::unknown("radar", None)]
+    #[case::empty("", None)]
+    fn idle_mode_names(#[case] name: &str, #[case] expected: Option<IdleMode>) {
+        assert_eq!(IdleMode::from_name(name), expected);
+    }
 
     /// Every field set to something other than its default.
     #[fixture]

@@ -16,9 +16,10 @@ use log::info;
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use esp_hal::rng::Rng;
+use on_air_core::settings::IdleMode;
 use on_air_firmware::{
     board, display_task, https, input_task, setup_network, sntp_task, spotify_task, storage,
-    wifi_task,
+    weather_task, wifi_task,
 };
 use static_cell::StaticCell;
 use tinyrlibc as _;
@@ -113,6 +114,19 @@ async fn main(spawner: Spawner) -> ! {
         spotify_task::spotify_task(https_client, store, rng.random())
             .expect("spotify task already running"),
     );
+    spawner.spawn(
+        weather_task::weather_task(https_client, store, rng.random())
+            .expect("weather task already running"),
+    );
+    // The idle screen from `.env` if set (there's no Mode button yet),
+    // else the saved one.
+    let idle_mode = match option_env!("ON_AIR_IDLE_SCREEN").and_then(IdleMode::from_name) {
+        Some(mode) => mode,
+        None => match store {
+            Some(store) => store.get().await.idle_mode,
+            None => IdleMode::default(),
+        },
+    };
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
     spawner.spawn(
@@ -125,7 +139,7 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.DMA_CH0,
     );
     spawner.spawn(
-        display_task::display_task(hub75, spare_frame, setup_network_name)
+        display_task::display_task(hub75, spare_frame, setup_network_name, idle_mode)
             .expect("display task already running"),
     );
 
