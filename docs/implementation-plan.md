@@ -156,7 +156,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P2 UI + simulator | ✅ Done |
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
-| P5 Network + TLS | In progress. WiFi, PSRAM, SNTP and TLS to all five hosts work; AP+STA and the slow geocoding request to do. |
+| P5 Network + TLS | In progress. WiFi, PSRAM, SNTP and TLS to all five hosts work; AP+STA to do. |
 | P6 Spotify on device | Not started. The logic is done in core. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
@@ -241,7 +241,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - [x] SNTP time. `sntp_task` syncs from `pool.ntp.org` once online and every 4 h, retrying with backoff; `core::clock` holds the offset. `sntpc` 0.8 is the version for embassy-net 0.8, so the firmware moved up from 0.7.
 - [x] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on. Decided: `mbedtls-rs`, which is what esp-mbedtls now publishes. All five hosts pass; see the notes.
 - [x] Retest `api.open-meteo.com`. On 2026-11-16 its TLS handshake never completed, from the Mac (`curl`, `openssl`) as well as the board, so it was the server or the network path. Retested the same evening: 200 OK in 1.6 s, so all five hosts pass.
-- [ ] Find why `geocoding-api.open-meteo.com` takes about 21.7 s on the board (0.6 s from the Mac), on every run. The check now logs each stage's time (DNS, connect, handshake, response, close) to show which one waits out the 20 s socket timeout.
+- [x] Find why `geocoding-api.open-meteo.com` takes about 21.7 s on the board (0.6 s from the Mac), on every run. The per-stage timings showed it: the request is done in 2 s (DNS 25 ms, connect 235 ms, handshake 1.5 s, response 0.25 s), then the server never answers our TLS close, so the close waited out the 20 s socket timeout. The close now gets a 1 s grace period. The real HTTP layer in P6 must do the same.
 - [ ] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
 
 **Notes so far (2026-11-16):**
@@ -249,7 +249,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - **TLS** uses `mbedtls-rs` 0.2, the release built against `esp-hal` 1.1. The newest `reqwless` needs Rust 1.91 and the older one uses `embedded-io` 0.6, so neither fits; the check writes its GET by hand over the session, and the real tasks will pick an HTTP layer in P6 (`edge-http` 0.7 matches `embedded-io` 0.7).
   - **Certificates** are verified against five pinned roots in `firmware/certs/roots.pem` (see its README), with dates checked against the SNTP clock. That needs mbedtls built from source, which the `use-gcc` feature does with the ESP toolchain's Xtensa GCC; Apple's clang can't target Xtensa.
   - **Randomness** comes from esp-hal's `Rng`, a true random source while the radio is on, rather than `TrngSource`, which would hold ADC1 that the knob needs.
-  - **Results**, software crypto: `accounts.spotify.com` 200 in 0.8–1.2 s, `api.spotify.com` 401 (expected, no sign-in) in 0.9–1.2 s, `i.scdn.co` 200 in 1.4–1.9 s, `api.open-meteo.com` 200 in 1.6 s (after an outage on its side), `geocoding-api.open-meteo.com` 200 but in about 21.7 s every time (0.6 s from the Mac; see the task above).
+  - **Results**, software crypto: `accounts.spotify.com` 200 in 0.8–1.2 s, `api.spotify.com` 401 (expected, no sign-in) in 0.9–1.2 s, `i.scdn.co` 200 in 1.4–1.9 s, `api.open-meteo.com` 200 in 1.6 s (after an outage on its side), `geocoding-api.open-meteo.com` 200 in about 2 s once the close stopped waiting (see the task above). Handshakes are 0.4–1.5 s of each request.
   - **Memory:** each session's memory is freed when it closes, so the heap is back to its starting point after the checks, and PSRAM is still untouched. The peak during a handshake hasn't been measured.
   - **Code size:** mbedtls adds about 470 KB; the firmware is about 1 MB of the 8 MB flash.
   - **Later:** the chip's SHA, RSA and AES hardware can speed up handshakes (`mbedtls_rs::sys::hook::backend::esp::EspAccel`).

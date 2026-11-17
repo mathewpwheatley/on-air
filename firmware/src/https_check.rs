@@ -9,7 +9,7 @@ use core::ffi::CStr;
 use embassy_net::Stack;
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
-use embassy_time::{Instant, Timer};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_io_async::Write;
 use esp_hal::rng::Rng;
 use log::{info, warn};
@@ -44,6 +44,10 @@ const CHECKS: [(&CStr, &str); 5] = [
         "/v1/search?name=Portland&count=1",
     ),
 ];
+
+/// How long to wait for a server to answer our TLS close before dropping
+/// the connection.
+const CLOSE_GRACE_MS: u64 = 1_000;
 
 /// TLS randomness from the hardware RNG, which is a true random source
 /// while the radio is on.
@@ -152,7 +156,7 @@ async fn get(
     let mut rx_buffer = [0u8; 4096];
     let mut tx_buffer = [0u8; 2048];
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    socket.set_timeout(Some(embassy_time::Duration::from_secs(20)));
+    socket.set_timeout(Some(Duration::from_secs(20)));
     socket
         .connect((address, 443))
         .await
@@ -200,7 +204,10 @@ async fn get(
         filled += read;
     }
     let response_ms = stage();
-    let _ = session.close().await;
+    // The response is already in, so don't wait long for the server to
+    // answer our close: some (Open-Meteo's geocoding API) never do, which
+    // would otherwise hold the socket for its full 20 s timeout.
+    let _ = with_timeout(Duration::from_millis(CLOSE_GRACE_MS), session.close()).await;
     let close_ms = stage();
     info!(
         "https: {host_name} stages: DNS {dns_ms} ms, connect {connect_ms} ms, \
