@@ -29,6 +29,7 @@
 //! two `/api/spotify/…` routes), and only until someone has signed in.
 
 use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use serde::Serialize;
@@ -122,12 +123,26 @@ pub fn parse_client_id(value: &str) -> Result<String, FieldErrors> {
 }
 
 /// A Spotify sign-in in progress: the PKCE verifier and `state` stay on the
-/// device between "Connect Spotify" and the pasted callback URL.
+/// device between "Connect Spotify" and the callback.
 #[derive(Debug, Clone)]
 pub struct SignIn {
     pub client_id: String,
     pkce: Pkce,
     state: String,
+    /// Where Spotify sends the browser back to.
+    redirect_uri: String,
+}
+
+/// An HTTPS page that Spotify redirects to, which forwards the browser, code
+/// and all, to the device's `/spotify/callback` on the home network. Spotify
+/// only redirects to HTTPS or loopback addresses, so this replaces copying
+/// the callback address by hand. See `tools/spotify-relay`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relay {
+    /// The relay page, registered as a redirect URI in the Spotify app.
+    pub url: String,
+    /// The device's address on the home network, e.g. `192.168.1.17`.
+    pub device_host: String,
 }
 
 impl SignIn {
@@ -142,12 +157,33 @@ impl SignIn {
             client_id: parse_client_id(client_id)?,
             pkce: Pkce::from_random(random),
             state: auth::state_from_random(state_random),
+            redirect_uri: auth::REDIRECT_URI.into(),
         })
+    }
+
+    /// Start a sign-in that comes back through `relay`. The device's address
+    /// rides after a `.` in `state`, which Spotify returns unchanged, so the
+    /// relay page knows where to forward to.
+    pub fn via_relay(
+        client_id: &str,
+        random: &[u8; 32],
+        state_random: &[u8; 16],
+        relay: &Relay,
+    ) -> Result<Self, FieldErrors> {
+        let mut sign_in = Self::new(client_id, random, state_random)?;
+        sign_in.state = format!("{}.{}", sign_in.state, relay.device_host);
+        sign_in.redirect_uri = relay.url.clone();
+        Ok(sign_in)
     }
 
     /// The page the **Connect Spotify** link opens.
     pub fn authorize_url(&self) -> String {
-        auth::authorize_url(&self.client_id, &self.pkce.challenge, &self.state)
+        auth::authorize_url(
+            &self.client_id,
+            &self.pkce.challenge,
+            &self.state,
+            &self.redirect_uri,
+        )
     }
 
     /// Read the authorization code from the URL the owner pasted.
@@ -157,7 +193,12 @@ impl SignIn {
 
     /// Form body for exchanging the code for tokens.
     pub fn exchange_body(&self, code: &str) -> String {
-        auth::code_exchange_body(&self.client_id, code, &self.pkce.verifier)
+        auth::code_exchange_body(
+            &self.client_id,
+            code,
+            &self.pkce.verifier,
+            &self.redirect_uri,
+        )
     }
 }
 
@@ -433,6 +474,32 @@ pub fn missing_before_done(settings: &Settings) -> Option<&'static str> {
     }
 }
 
+/// The page the relay's callback shows: signed in, or why not, with a way
+/// to try again.
+pub fn callback_page(result: Result<(), &str>) -> String {
+    let body = match result {
+        Ok(()) => String::from(
+            "<h1>Signed in</h1><p>On-Air restarts and shows what you're playing in a moment. You can close this page.</p>",
+        ),
+        Err(message) => format!(
+            "<h1>Not signed in</h1><p>{}</p><p><a href=\"/spotify\">Try again</a></p>",
+            escape_html(message)
+        ),
+    };
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>On-Air</title><style>body{{font:16px system-ui,sans-serif;margin:0;padding:24px;\
+         background:#111;color:#eee}}a{{color:#1db954}}</style></head><body>{body}</body></html>"
+    )
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// `{"ok":true}`.
 pub fn ok_json() -> String {
     String::from(r#"{"ok":true}"#)
@@ -501,6 +568,8 @@ pub enum Reply {
     /// [`PAGE`], as HTML.
     Page,
     Json(String),
+    /// A small HTML page, such as the sign-in result.
+    Html(String),
     /// `302` to `/`, for captive-portal probes.
     Redirect,
     NotFound,
@@ -509,7 +578,7 @@ pub enum Reply {
 impl Reply {
     pub fn status(&self) -> u16 {
         match self {
-            Reply::Page | Reply::Json(_) => 200,
+            Reply::Page | Reply::Json(_) | Reply::Html(_) => 200,
             Reply::Redirect => 302,
             Reply::NotFound => 404,
         }
@@ -517,7 +586,7 @@ impl Reply {
 
     pub fn content_type(&self) -> &'static str {
         match self {
-            Reply::Page => "text/html; charset=utf-8",
+            Reply::Page | Reply::Html(_) => "text/html; charset=utf-8",
             Reply::Json(_) => "application/json",
             Reply::Redirect | Reply::NotFound => "text/plain",
         }
@@ -526,7 +595,7 @@ impl Reply {
     pub fn body(&self) -> &str {
         match self {
             Reply::Page => PAGE,
-            Reply::Json(json) => json,
+            Reply::Json(json) | Reply::Html(json) => json,
             Reply::Redirect => "",
             Reply::NotFound => "Not found",
         }
@@ -556,9 +625,17 @@ pub enum Event {
     Done,
 }
 
+/// How to answer once a sign-in's token exchange is done.
+enum Answer {
+    /// The paste box: JSON for the page.
+    Json,
+    /// The relay's callback: a page of its own.
+    Page,
+}
+
 enum Pending {
     Places,
-    TokenExchange(SignIn),
+    TokenExchange(SignIn, Answer),
     /// Display settings with a new city, waiting on its tide check.
     Display(DisplayForm),
 }
@@ -571,6 +648,7 @@ pub struct Portal {
     wifi: WifiState,
     networks: Vec<Network>,
     sign_in: Option<SignIn>,
+    relay: Option<Relay>,
     pending: Option<Pending>,
 }
 
@@ -582,6 +660,7 @@ impl Portal {
             wifi: WifiState::NotSet,
             networks: Vec::new(),
             sign_in: None,
+            relay: None,
             pending: None,
         }
     }
@@ -598,6 +677,11 @@ impl Portal {
     /// Progress joining the home WiFi.
     pub fn set_wifi(&mut self, state: WifiState) {
         self.wifi = state;
+    }
+
+    /// Sign-ins started from now on come back through `relay`.
+    pub fn set_relay(&mut self, relay: Option<Relay>) {
+        self.relay = relay;
     }
 
     /// Handle a request from the home network, where the only thing open is
@@ -622,6 +706,7 @@ impl Portal {
                     | (Method::Get, "/api/status")
                     | (Method::Post, "/api/spotify/start")
                     | (Method::Post, "/api/spotify/finish")
+                    | (Method::Get, "/spotify/callback")
             );
         match (open, path) {
             (false, _) => Handled::Reply(Reply::NotFound),
@@ -679,7 +764,13 @@ impl Portal {
                 let (verifier_random, state_random) = random_bytes.split_at(32);
                 let verifier_random: [u8; 32] = verifier_random.try_into().unwrap_or([0; 32]);
                 let state_random: [u8; 16] = state_random.try_into().unwrap_or([0; 16]);
-                match SignIn::new(&client_id, &verifier_random, &state_random) {
+                let sign_in = match &self.relay {
+                    Some(relay) => {
+                        SignIn::via_relay(&client_id, &verifier_random, &state_random, relay)
+                    }
+                    None => SignIn::new(&client_id, &verifier_random, &state_random),
+                };
+                match sign_in {
                     Ok(sign_in) => {
                         let url = sign_in.authorize_url();
                         self.sign_in = Some(sign_in);
@@ -701,10 +792,30 @@ impl Portal {
                             bearer: None,
                             form_body: Some(sign_in.exchange_body(&code)),
                         };
-                        self.pending = Some(Pending::TokenExchange(sign_in));
+                        self.pending = Some(Pending::TokenExchange(sign_in, Answer::Json));
                         Handled::Fetch(request)
                     }
                     Err(e) => json(message_json(callback_message(&e))),
+                }
+            }
+            // Spotify, through the relay page, sends the browser here.
+            (Method::Get, "/spotify/callback") => {
+                let page = |message: &str| Handled::Reply(Reply::Html(callback_page(Err(message))));
+                let Some(sign_in) = self.sign_in.clone() else {
+                    return page("This sign-in has already finished or was never started.");
+                };
+                match sign_in.code_from(target) {
+                    Ok(code) => {
+                        let request = http::Request {
+                            method: Method::Post,
+                            url: auth::TOKEN_URL.into(),
+                            bearer: None,
+                            form_body: Some(sign_in.exchange_body(&code)),
+                        };
+                        self.pending = Some(Pending::TokenExchange(sign_in, Answer::Page));
+                        Handled::Fetch(request)
+                    }
+                    Err(e) => page(callback_message(&e)),
                 }
             }
             (Method::Post, "/api/display") => match parse_display(body) {
@@ -746,6 +857,13 @@ impl Portal {
     /// The reply for a request that needed a [`Handled::Fetch`].
     pub fn finish(&mut self, outcome: Outcome, events: &mut impl FnMut(Event)) -> Reply {
         let reply = match self.pending.take() {
+            Some(Pending::TokenExchange(sign_in, answer)) => {
+                let result = self.finish_sign_in(sign_in, outcome, events);
+                return match answer {
+                    Answer::Json => Reply::Json(result.map_or_else(message_json, |()| ok_json())),
+                    Answer::Page => Reply::Html(callback_page(result)),
+                };
+            }
             Some(Pending::Places) => match outcome {
                 Ok(r) if r.status == 200 => match weather::parse_geocoding(&r.body) {
                     Ok(places) => places_json(&places),
@@ -753,7 +871,6 @@ impl Portal {
                 },
                 _ => message_json("Couldn't search for cities right now. Try again."),
             },
-            Some(Pending::TokenExchange(sign_in)) => self.finish_sign_in(sign_in, outcome, events),
             Some(Pending::Display(form)) => {
                 form.apply(&mut self.settings);
                 // A failed check stays unknown and is tried again later.
@@ -769,18 +886,15 @@ impl Portal {
         Reply::Json(reply)
     }
 
+    /// Save the tokens from a sign-in's code exchange, or say why not.
     fn finish_sign_in(
         &mut self,
         sign_in: SignIn,
         outcome: Outcome,
         events: &mut impl FnMut(Event),
-    ) -> String {
-        let response = match outcome {
-            Ok(response) => response,
-            Err(NetworkError) => {
-                return message_json("Couldn't reach Spotify. Check the WiFi and try again.");
-            }
-        };
+    ) -> Result<(), &'static str> {
+        let response = outcome
+            .map_err(|NetworkError| "Couldn't reach Spotify. Check the WiFi and try again.")?;
         match auth::parse_token_response(response.status, &response.body) {
             Ok(tokens) => match tokens.refresh_token {
                 Some(refresh_token) => {
@@ -788,19 +902,17 @@ impl Portal {
                     self.settings.spotify_refresh_token = Some(refresh_token);
                     self.sign_in = None;
                     events(Event::SignedIn);
-                    ok_json()
+                    Ok(())
                 }
-                None => message_json(
-                    "Spotify didn't send everything needed. Tap Connect Spotify to try again.",
-                ),
+                None => Err("Spotify didn't send everything needed. Sign in again."),
             },
-            Err(TokenError::InvalidGrant) => message_json(
-                "That sign-in has expired or was already used. Tap Connect Spotify to try again.",
-            ),
-            Err(TokenError::InvalidClient) => message_json(
+            Err(TokenError::InvalidGrant) => {
+                Err("That sign-in has expired or was already used. Sign in again.")
+            }
+            Err(TokenError::InvalidClient) => Err(
                 "Spotify doesn't recognise that Client ID. Check it in your Spotify app's settings.",
             ),
-            Err(_) => message_json("Spotify sign-in failed. Tap Connect Spotify to try again."),
+            Err(_) => Err("Spotify sign-in failed. Sign in again."),
         }
     }
 }
@@ -1438,6 +1550,97 @@ mod tests {
             Handled::Reply(Reply::NotFound)
         );
         assert!(events.is_empty());
+    }
+
+    fn relay() -> Relay {
+        Relay {
+            url: "https://example.github.io/on-air-signin/".into(),
+            device_host: "192.168.1.17".into(),
+        }
+    }
+
+    #[test]
+    fn relay_sign_in_names_the_relay_and_the_device() {
+        let sign_in = SignIn::via_relay(
+            "0123456789abcdef0123456789abcdef",
+            &[7; 32],
+            &[9; 16],
+            &relay(),
+        )
+        .unwrap();
+        let url = sign_in.authorize_url();
+        assert!(
+            url.contains("redirect_uri=https%3A%2F%2Fexample.github.io%2Fon-air-signin%2F"),
+            "{url}"
+        );
+        assert!(
+            url.contains(".192.168.1.17&") || url.ends_with(".192.168.1.17"),
+            "{url}"
+        );
+        // The code exchange has to name the same redirect.
+        assert!(
+            sign_in
+                .exchange_body("abc")
+                .contains("redirect_uri=https%3A%2F%2Fexample.github.io")
+        );
+    }
+
+    #[test]
+    fn relay_callback_signs_in_on_the_home_network() {
+        let mut portal = Portal::new(Settings::default(), "OnAir-1A2B");
+        portal.set_relay(Some(relay()));
+        let mut events = Vec::new();
+        let Handled::Reply(Reply::Json(start)) = portal.handle_home(
+            Method::Post,
+            "/api/spotify/start",
+            "client_id=0123456789abcdef0123456789abcdef",
+            &mut random,
+            &mut |e| events.push(e),
+        ) else {
+            panic!()
+        };
+        let state = start
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .trim_end_matches("\"}");
+        assert!(state.ends_with(".192.168.1.17"), "{state}");
+
+        // A stale or forged state gets a page saying so, and no fetch.
+        let Handled::Reply(Reply::Html(refused)) = portal.handle_home(
+            Method::Get,
+            "/spotify/callback?code=abc&state=wrong",
+            "",
+            &mut random,
+            &mut |e| events.push(e),
+        ) else {
+            panic!()
+        };
+        assert!(refused.contains("Not signed in"), "{refused}");
+
+        let callback = alloc::format!("/spotify/callback?code=abc&state={state}");
+        let Handled::Fetch(exchange) =
+            portal.handle_home(Method::Get, &callback, "", &mut random, &mut |e| {
+                events.push(e)
+            })
+        else {
+            panic!()
+        };
+        assert!(exchange.form_body.unwrap().contains("code=abc"));
+        let token_ok = include_bytes!("../tests/fixtures/spotify_token_ok.json");
+        let Reply::Html(done) = portal.finish(Ok(Response::new(200, &token_ok[..])), &mut |e| {
+            events.push(e)
+        }) else {
+            panic!()
+        };
+        assert!(done.contains("Signed in"), "{done}");
+        assert_eq!(events, [Event::SignedIn]);
+        assert!(portal.settings().spotify_refresh_token.is_some());
+    }
+
+    #[test]
+    fn callback_page_escapes_messages() {
+        assert!(callback_page(Err("<script>")).contains("&lt;script&gt;"));
     }
 
     /// Spotify sign-in happens afterwards, from the home network.

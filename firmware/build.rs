@@ -73,7 +73,7 @@ fn linker_be_nice() {
 /// Pass the WiFi name and password from the repo's `.env` to the build, for
 /// `option_env!`. The environment wins over the file.
 fn forward_env() {
-    const KEYS: [&str; 9] = [
+    const KEYS: [&str; 10] = [
         "ON_AIR_WIFI_SSID",
         "ON_AIR_WIFI_PASSWORD",
         "SPOTIFY_CLIENT_ID",
@@ -83,6 +83,7 @@ fn forward_env() {
         "ON_AIR_CITY",
         "ON_AIR_FAHRENHEIT",
         "ON_AIR_IDLE_SCREEN",
+        "ON_AIR_SPOTIFY_RELAY",
     ];
     let path = std::path::Path::new("../.env");
     println!("cargo:rerun-if-changed={}", path.display());

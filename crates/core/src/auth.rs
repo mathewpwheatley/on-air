@@ -16,7 +16,9 @@ use crate::form_encode;
 pub const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 pub const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 /// Loopback redirect. Spotify allows plain HTTP only for loopback addresses.
-/// Nothing listens there on the phone; the owner copies the URL back.
+/// The simulator listens there on this computer; on a phone nothing does,
+/// so the owner copies the URL back. The device prefers an HTTPS relay page
+/// (see `tools/spotify-relay`) that forwards the code to it.
 pub const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 pub const SCOPES: &str =
     "user-read-currently-playing user-read-playback-state user-modify-playback-state";
@@ -47,13 +49,14 @@ pub fn state_from_random(random: &[u8; 16]) -> String {
     URL_SAFE_NO_PAD.encode(random)
 }
 
-/// The URL the **Connect Spotify** link opens.
-pub fn authorize_url(client_id: &str, challenge: &str, state: &str) -> String {
+/// The URL the **Connect Spotify** link opens. `redirect_uri` is where
+/// Spotify sends the browser back to: [`REDIRECT_URI`] or a relay page.
+pub fn authorize_url(client_id: &str, challenge: &str, state: &str, redirect_uri: &str) -> String {
     let query = form_encode(&[
         ("response_type", "code"),
         ("client_id", client_id),
         ("scope", SCOPES),
-        ("redirect_uri", REDIRECT_URI),
+        ("redirect_uri", redirect_uri),
         ("code_challenge_method", "S256"),
         ("code_challenge", challenge),
         ("state", state),
@@ -105,12 +108,18 @@ pub fn parse_callback(pasted: &str, expected_state: &str) -> Result<String, Call
         .ok_or(CallbackError::NotACallback)
 }
 
-/// Form body for exchanging the authorization code for tokens.
-pub fn code_exchange_body(client_id: &str, code: &str, verifier: &str) -> String {
+/// Form body for exchanging the authorization code for tokens. Spotify
+/// checks `redirect_uri` matches the one in the authorize URL.
+pub fn code_exchange_body(
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+) -> String {
     form_encode(&[
         ("grant_type", "authorization_code"),
         ("code", code),
-        ("redirect_uri", REDIRECT_URI),
+        ("redirect_uri", redirect_uri),
         ("client_id", client_id),
         ("code_verifier", verifier),
     ])
@@ -213,7 +222,7 @@ mod tests {
     #[case::redirect("redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback")]
     #[case::challenge_and_state("code_challenge_method=S256&code_challenge=CHAL&state=st8")]
     fn authorize_url_has_every_parameter_encoded(#[case] part: &str) {
-        let url = authorize_url("abc123", "CHAL", "st8");
+        let url = authorize_url("abc123", "CHAL", "st8", REDIRECT_URI);
         assert!(url.contains(part), "{url}");
     }
 
@@ -253,7 +262,7 @@ mod tests {
     #[test]
     fn request_bodies() {
         assert_eq!(
-            code_exchange_body("cid", "c/de", "ver"),
+            code_exchange_body("cid", "c/de", "ver", REDIRECT_URI),
             "grant_type=authorization_code&code=c%2Fde&redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback&client_id=cid&code_verifier=ver"
         );
         assert_eq!(

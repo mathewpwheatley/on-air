@@ -138,6 +138,7 @@ async fn main(spawner: Spawner) -> ! {
         && (settings.from_portal || config::SPOTIFY_REFRESH_TOKEN.is_none());
     if sign_in_open {
         let home = setup_network::PortalShared::home(
+            stack,
             settings.settings.clone(),
             setup_network_name,
             store,

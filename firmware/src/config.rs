@@ -19,6 +19,9 @@ const CLOCK_24H: Option<&str> = option_env!("ON_AIR_CLOCK_24H");
 pub const CITY: Option<&str> = option_env!("ON_AIR_CITY");
 const FAHRENHEIT: Option<&str> = option_env!("ON_AIR_FAHRENHEIT");
 const IDLE_SCREEN: Option<&str> = option_env!("ON_AIR_IDLE_SCREEN");
+/// The HTTPS relay page for Spotify sign-in (see `tools/spotify-relay`).
+/// Without it, sign-in falls back to pasting the callback address.
+pub const SPOTIFY_RELAY: Option<&str> = option_env!("ON_AIR_SPOTIFY_RELAY");
 
 fn set(value: Option<&'static str>) -> Option<&'static str> {
     value.map(str::trim).filter(|v| !v.is_empty())

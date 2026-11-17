@@ -1,0 +1,36 @@
+# Publishes only the Spotify sign-in relay page (tools/spotify-relay) to
+# GitHub Pages, at https://<owner>.github.io/<repo>/. Nothing else from the
+# repository goes on the site.
+name: Publish the Spotify sign-in relay
+
+on:
+  push:
+    branches: [main]
+    paths: [tools/spotify-relay/index.html, .github/workflows/spotify-relay.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Take just the relay page
+        run: mkdir site && cp tools/spotify-relay/index.html site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

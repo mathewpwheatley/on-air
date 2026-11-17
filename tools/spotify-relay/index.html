@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>On-Air</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 0; padding: 24px; background: #111; color: #eee; }
+</style>
+</head>
+<body>
+<p id="message">Returning to On-Air…</p>
+<script>
+// Spotify sends the browser here after sign-in, because it only redirects
+// to HTTPS (or loopback) addresses. On-Air put its home-network address
+// after the last "." of its random `state`; this page forwards the browser,
+// with Spotify's code and state, to that device. Nothing is stored or sent
+// anywhere else.
+const query = location.search;
+const state = new URLSearchParams(query).get("state") || "";
+const host = state.slice(state.indexOf(".") + 1);
+// Only private home-network addresses, so this can't redirect elsewhere.
+const privateAddress =
+  /^(10\.\d{1,3}|192\.168|172\.(1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}$/;
+if (state.includes(".") && privateAddress.test(host)) {
+  location.replace(`http://${host}/spotify/callback${query}`);
+} else {
+  document.getElementById("message").textContent =
+    "This page passes a Spotify sign-in back to an On-Air on your home network, " +
+    "but this link doesn't name one. Start the sign-in again from On-Air.";
+}
+</script>
+</body>
+</html>

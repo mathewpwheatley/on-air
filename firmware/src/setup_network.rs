@@ -5,6 +5,7 @@
 
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_net::tcp::TcpSocket;
@@ -16,10 +17,11 @@ use embedded_io_async::Write;
 use esp_hal::rng::Rng;
 use log::{info, warn};
 use on_air_core::http::{self, DecodedRequest, IncomingRequest, Method};
-use on_air_core::portal::{Event, Handled, Portal, Reply};
+use on_air_core::portal::{Event, Handled, Portal, Relay, Reply};
 use on_air_core::settings::Settings;
 use static_cell::StaticCell;
 
+use crate::config;
 use crate::https::HttpsClient;
 use crate::storage::SettingsStore;
 use crate::wifi_task::{self, WifiCommand};
@@ -107,8 +109,9 @@ pub async fn dns_task(stack: Stack<'static>) -> ! {
 /// the home network's Spotify sign-in.
 pub struct PortalShared {
     portal: Mutex<CriticalSectionRawMutex, Portal>,
-    /// On the home network: only the Spotify sign-in is open.
-    home: bool,
+    /// On the home network: only the Spotify sign-in is open. Its stack
+    /// gives the board's address, for the relay.
+    home: Option<Stack<'static>>,
     store: Option<&'static SettingsStore>,
     client: &'static HttpsClient,
     /// Whether the portal has a network list yet.
@@ -124,29 +127,36 @@ impl PortalShared {
         client: &'static HttpsClient,
     ) -> &'static PortalShared {
         static SHARED: StaticCell<PortalShared> = StaticCell::new();
-        SHARED.init(Self::new(settings, network_name, false, store, client))
+        SHARED.init(Self::new(settings, network_name, None, store, client))
     }
 
-    /// The home network's Spotify sign-in.
+    /// The home network's Spotify sign-in, on `stack`.
     pub fn home(
+        stack: Stack<'static>,
         settings: Settings,
         network_name: &str,
         store: Option<&'static SettingsStore>,
         client: &'static HttpsClient,
     ) -> &'static PortalShared {
         static SHARED: StaticCell<PortalShared> = StaticCell::new();
-        SHARED.init(Self::new(settings, network_name, true, store, client))
+        SHARED.init(Self::new(
+            settings,
+            network_name,
+            Some(stack),
+            store,
+            client,
+        ))
     }
 
     fn new(
         settings: Settings,
         network_name: &str,
-        home: bool,
+        home: Option<Stack<'static>>,
         store: Option<&'static SettingsStore>,
         client: &'static HttpsClient,
     ) -> PortalShared {
         let mut portal = Portal::new(settings, network_name);
-        if home {
+        if home.is_some() {
             // It's reached over the home WiFi, so that's connected.
             portal.set_wifi(on_air_core::portal::WifiState::Connected);
         }
@@ -240,7 +250,17 @@ async fn handle(shared: &PortalShared, request: IncomingRequest) -> (Vec<u8>, bo
         let rng = Rng::new();
         let mut random = |buffer: &mut [u8]| rng.read(buffer);
         let mut emit = |event| events.push(event);
-        if shared.home {
+        if let Some(stack) = shared.home {
+            // Sign-ins come back through the relay page when there is one,
+            // which needs the board's current address.
+            let relay = config::SPOTIFY_RELAY
+                .filter(|url| !url.is_empty())
+                .zip(stack.config_v4())
+                .map(|(url, address)| Relay {
+                    url: url.into(),
+                    device_host: format!("{}", address.address.address()),
+                });
+            portal.set_relay(relay);
             portal.handle_home(method, &request.target, &body, &mut random, &mut emit)
         } else {
             portal.handle(method, &request.target, &body, &mut random, &mut emit)
@@ -319,7 +339,7 @@ async fn act(shared: &PortalShared, event: Event) -> bool {
         }
         // From the home network: keep just the sign-in, and restart so the
         // Spotify task picks it up.
-        Event::SignedIn if shared.home => {
+        Event::SignedIn if shared.home.is_some() => {
             let settings = shared.portal.lock().await.settings().clone();
             if let Some(store) = shared.store {
                 store
