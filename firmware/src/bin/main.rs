@@ -13,7 +13,8 @@ use esp_hal::timer::timg::TimerGroup;
 use log::info;
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use on_air_firmware::board;
+use on_air_firmware::input_task::{self, BRIGHTNESS};
 
 use esp_backtrace as _;
 
@@ -52,13 +53,11 @@ async fn main(spawner: Spawner) -> ! {
         esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
+    spawner.must_spawn(input_task::knob_buttons_task(knob_buttons));
 
+    // Until the panel is driven, log the brightness instead.
     loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        info!("brightness: {}", BRIGHTNESS.wait().await);
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
 }

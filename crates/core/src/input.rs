@@ -206,6 +206,77 @@ fn curve(position: i32, floor: u8) -> u8 {
     (floor + (255 - floor) * level / 1000) as u8
 }
 
+/// How far one step of [`KnobButtons`] turns the pretend knob: 16 steps
+/// from end to end.
+pub const KNOB_STEP: u16 = 256;
+/// Holding a brightness button repeats after this long...
+pub const KNOB_REPEAT_DELAY_MS: u64 = 400;
+/// ...then steps this often.
+pub const KNOB_REPEAT_MS: u64 = 100;
+
+/// Two buttons standing in for the knob until it's fitted, like the
+/// MatrixPortal's own UP and DOWN. A press turns a pretend knob one
+/// [`KNOB_STEP`], and holding repeats. [`Knob`] turns the position into a
+/// brightness, so the curve and floor are the same as the real knob's.
+pub struct KnobButtons {
+    debounce: [DebouncerStateful<u8, Repeat4>; 2],
+    /// When each held button steps next.
+    next_step_at: [Option<u64>; 2],
+    position: u16,
+    knob: Knob,
+}
+
+impl KnobButtons {
+    /// Starts with the pretend knob at `position` (0 to [`ADC_MAX`]).
+    pub fn new(floor: u8, position: u16) -> Self {
+        Self {
+            debounce: core::array::from_fn(|_| debounce_stateful_4(false)),
+            next_step_at: [None; 2],
+            position: position.min(ADC_MAX),
+            knob: Knob::new(floor),
+        }
+    }
+
+    /// `pressed` is `[up, down]`, true while held. Call every
+    /// [`POLL_INTERVAL_MS`]. Returns a new brightness when it changes, and
+    /// the starting brightness on the first call.
+    pub fn update(&mut self, pressed: [bool; 2], now_ms: u64) -> Option<u8> {
+        let mut first_step = [false; 2];
+        for i in 0..2 {
+            match self.debounce[i].update(pressed[i]) {
+                Some(Edge::Rising) => {
+                    first_step[i] = true;
+                    self.next_step_at[i] = Some(now_ms);
+                }
+                Some(Edge::Falling) => self.next_step_at[i] = None,
+                None => {}
+            }
+        }
+        // Both held: neither moves the knob.
+        let both = self.next_step_at.iter().all(Option::is_some);
+        for i in 0..2 {
+            let Some(at) = self.next_step_at[i] else {
+                continue;
+            };
+            if both || now_ms < at {
+                continue;
+            }
+            self.position = if i == 0 {
+                self.position.saturating_add(KNOB_STEP).min(ADC_MAX)
+            } else {
+                self.position.saturating_sub(KNOB_STEP)
+            };
+            let wait = if first_step[i] {
+                KNOB_REPEAT_DELAY_MS
+            } else {
+                KNOB_REPEAT_MS
+            };
+            self.next_step_at[i] = Some(now_ms + wait);
+        }
+        self.knob.update(self.position)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +412,77 @@ mod tests {
             changed |= k.update(3000).is_some();
         }
         assert!(changed);
+    }
+
+    /// Hold `pressed` from `from` to `to` ms, returning the last brightness
+    /// reported.
+    fn run_knob(
+        k: &mut KnobButtons,
+        pressed: [bool; 2],
+        from: u64,
+        to: u64,
+        last: &mut Option<u8>,
+    ) {
+        let mut t = from;
+        while t <= to {
+            if let Some(v) = k.update(pressed, t) {
+                *last = Some(v);
+            }
+            t += POLL_INTERVAL_MS;
+        }
+    }
+
+    const NONE: [bool; 2] = [false, false];
+    const PRESS_UP: [bool; 2] = [true, false];
+    const PRESS_DOWN: [bool; 2] = [false, true];
+    const BOTH: [bool; 2] = [true, true];
+
+    #[test]
+    fn knob_buttons_report_the_starting_brightness() {
+        let mut k = KnobButtons::new(DEFAULT_FLOOR, ADC_MAX);
+        assert_eq!(k.update(NONE, 0), Some(255));
+    }
+
+    #[test]
+    fn knob_buttons_tap_steps_once() {
+        let start = 2048;
+        let mut k = KnobButtons::new(DEFAULT_FLOOR, start);
+        let mut last = None;
+        run_knob(&mut k, NONE, 0, 100, &mut last);
+        assert_eq!(last, Some(curve(start as i32, DEFAULT_FLOOR)));
+        // Shorter than the repeat delay.
+        run_knob(&mut k, PRESS_UP, 105, 300, &mut last);
+        run_knob(&mut k, NONE, 305, 600, &mut last);
+        // The knob's smoothing settles within a level of the target.
+        let expected = curve((start + KNOB_STEP) as i32, DEFAULT_FLOOR);
+        assert!(
+            last.unwrap().abs_diff(expected) <= 1,
+            "{last:?} vs {expected}"
+        );
+    }
+
+    #[rstest]
+    #[case::up_to_full(PRESS_UP, 0, 255)]
+    #[case::down_to_the_floor(PRESS_DOWN, ADC_MAX, DEFAULT_FLOOR)]
+    fn knob_buttons_holding_repeats_to_the_end(
+        #[case] pressed: [bool; 2],
+        #[case] start: u16,
+        #[case] end: u8,
+    ) {
+        let mut k = KnobButtons::new(DEFAULT_FLOOR, start);
+        let mut last = None;
+        // 16 steps: one, the delay, then 15 repeats, with time to settle.
+        let hold_ms = KNOB_REPEAT_DELAY_MS + 16 * KNOB_REPEAT_MS + 200;
+        run_knob(&mut k, pressed, 0, hold_ms, &mut last);
+        assert_eq!(last, Some(end));
+    }
+
+    #[test]
+    fn knob_buttons_held_together_do_nothing() {
+        let mut k = KnobButtons::new(DEFAULT_FLOOR, 2048);
+        let mut last = None;
+        run_knob(&mut k, BOTH, 0, 2_000, &mut last);
+        assert_eq!(last, Some(curve(2048, DEFAULT_FLOOR)));
     }
 
     #[test]

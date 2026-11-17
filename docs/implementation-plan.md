@@ -1,6 +1,6 @@
 # On-Air — Software Implementation Plan
 
-**Status:** Draft v0.1 · **Date:** 2026-11-08 · **Owner:** Mathew Wheatley
+**Status:** Draft v0.1 · **Date:** 2026-11-08 · **Updated:** 2026-11-16 · **Owner:** Mathew Wheatley
 
 How the firmware gets built, in what order, and how each piece is tested. Requirement IDs (D-1, S-3, …) refer to [requirements.md](requirements.md).
 
@@ -147,14 +147,27 @@ Still hand-written, because they're short and specific to On-Air:
 
 ## 3. Phases
 
-Each phase lists its tasks and when it counts as done.
+Each phase lists its tasks and when it counts as done. Ticked tasks are finished; a ✅ on the heading means the whole phase is.
 
-### P0 — Scaffolding (host)
+| Phase | Status |
+|---|---|
+| P0 Scaffolding | ✅ Done |
+| P1 Core logic | ✅ Done |
+| P2 UI + simulator | ✅ Done |
+| P3 Panel bring-up | Next |
+| P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
+| P5 Network + TLS | Not started |
+| P6 Spotify on device | Not started. The logic is done in core. |
+| P7 Setup portal | Host side done. The device side is not started. |
+| P8 Idle screens | Not started. The screens and weather logic are done on the host. |
+| P9 Polish | Host side done. The device side is not started. |
 
-- Install the toolchain: `espup install`, `cargo install espflash esp-generate`.
-- Create the workspace, `on-air-core`, `on-air-ui` and `tools/sim`.
-- Generate `firmware/` with `esp-generate` (target ESP32-S3, Embassy, PSRAM, `esp-radio`), then trim it.
-- Add `rustfmt`, `clippy` (deny warnings) and a `justfile` with `test`, `sim`, `build`, `flash` and `monitor`.
+### P0 — Scaffolding (host) ✅
+
+- [x] Install the toolchain: `espup install`, `cargo install espflash esp-generate`.
+- [x] Create the workspace, `on-air-core`, `on-air-ui` and `tools/sim`.
+- [x] Generate `firmware/` with `esp-generate` (target ESP32-S3, Embassy, PSRAM, `esp-radio`), then trim it.
+- [x] Add `rustfmt`, `clippy` (deny warnings) and a `justfile` with `test`, `sim`, `build`, `flash` and `monitor`.
 
 **Done when:** `just test` passes on the host and `just build` produces a firmware image.
 
@@ -164,25 +177,25 @@ Each phase lists its tasks and when it counts as done.
 - **SDL2 on macOS.** `tools/sim/build.rs` adds Homebrew's lib folder to the linker search path, since recent macOS toolchains don't search it by default.
 - **PSRAM.** The template heap is about 72 KB of internal RAM. Moving the heap to PSRAM is left to P5, when TLS needs it.
 
-### P1 — Core logic (host)
+### P1 — Core logic (host) ✅
 
-- Build every module in §2.1 test-first.
-- Record real API responses as test fixtures in `crates/core/tests/fixtures/`, with personal data scrubbed:
-  - Spotify: track playing, episode playing, paused, 204, 401, 429
-  - Open-Meteo: forecast and geocoding
-- Test the `app` state machine against the D-6 diagram, one test per arrow.
+- [x] Build every module in §2.1 test-first.
+- [x] Record real API responses as test fixtures in `crates/core/tests/fixtures/`, with personal data scrubbed:
+  - [x] Spotify: track playing, episode playing, paused, 204, 401, 429
+  - [x] Open-Meteo: forecast and geocoding
+- [x] Test the `app` state machine against the D-6 diagram, one test per arrow.
 
 **Done when:** all modules have unit tests and the fixtures parse.
 
-### P2 — UI + simulator (host)
+### P2 — UI + simulator (host) ✅
 
-- Build every screen in §2.2.
-- `tools/sim` shows a 64×64 window, scaled up, using the real `app` state machine:
-  - Keys 1–4 are the buttons; holding a key counts as a long press.
-  - `-` and `+` turn the knob.
-- `--fake` mode plays scripted playback and weather.
-- `--live` mode runs the real PKCE flow on the Mac (a local listener on `127.0.0.1:8888` catches the callback). It then polls Spotify and Open-Meteo with `reqwest`. This proves the OAuth flow and parsing against the real APIs before any hardware.
-- Snapshot tests: render each screen to an in-memory buffer and compare it to a checked-in PNG.
+- [x] Build every screen in §2.2.
+- [x] `tools/sim` shows a 64×64 window, scaled up, using the real `app` state machine:
+  - [x] Keys 1–4 are the buttons; holding a key counts as a long press.
+  - [x] `-` and `+` turn the knob.
+- [x] Fake mode plays scripted playback and weather. It's the default, so there's no `--fake` flag.
+- [x] `--live` mode runs the real PKCE flow on the Mac (a local listener on `127.0.0.1:8888` catches the callback). It then polls Spotify and Open-Meteo with `reqwest`. This proves the OAuth flow and parsing against the real APIs before any hardware.
+- [x] Snapshot tests: render each screen to an in-memory buffer and compare it to a checked-in PNG.
 
 **Done when:** in the simulator, album art follows what's playing on Spotify, the idle screens look readable at 64×64 (R-6), and the snapshots are checked in.
 
@@ -195,10 +208,10 @@ Each phase lists its tasks and when it counts as done.
 
 ### P3 — Panel bring-up (M0)
 
-- Fill in `board.rs` from Adafruit's pinout. Set the address-E jumper.
-- Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test.
-- Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2).
-- Bench-measure the current at full white (Q-3) and the board's temperature at 2.5 A (Q-1).
+- [ ] Fill in `board.rs` from Adafruit's pinout. Set the address-E jumper. (It has the UP and DOWN buttons so far.)
+- [ ] Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test.
+- [ ] Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2).
+- [ ] Bench-measure the current at full white (Q-3) and the board's temperature at 2.5 A (Q-1).
 
 **Done when:** a test pattern shows cleanly and the current numbers are recorded in requirements.md.
 
@@ -206,18 +219,20 @@ Each phase lists its tasks and when it counts as done.
 
 ### P4 — Inputs (M1)
 
-- `input_task` on real pins, using `core::input`.
-- Knob drives brightness on the test pattern, with the floor and curve.
-- Buttons log tap and long-press events.
+- [ ] `input_task` on real pins, using `core::input`.
+- [ ] Knob drives brightness on the test pattern, with the floor and curve.
+- [ ] Buttons log tap and long-press events.
 
 **Done when:** the knob dims smoothly with no jitter, and all four buttons and both long presses are detected.
 
+**Until the buttons and knob arrive (2026-11-16):** the board's own UP (GPIO6) and DOWN (GPIO7) buttons stand in for the knob. `core::input::KnobButtons` turns each press into one step of a pretend knob, repeating while held, and feeds it through `Knob`, so the curve and floor match. The firmware's `knob_buttons_task` sends the result on the brightness signal, and `main` logs it until the panel is driven. The four playback buttons wait for the parts.
+
 ### P5 — Network + TLS spike (M2)
 
-- Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time).
-- SNTP time.
-- **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on.
-- **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
+- [ ] Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time).
+- [ ] SNTP time.
+- [ ] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on.
+- [ ] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
 
 **Done when:**
 - An HTTPS GET to each host succeeds with certificates verified.
@@ -227,22 +242,22 @@ Each phase lists its tasks and when it counts as done.
 
 ### P6 — Spotify on device (M3)
 
-- `spotify_task` with a hard-coded refresh token:
-  - token refresh
-  - polling on `core::schedule`
-  - art download, decode and display
-- Playback buttons, with a "Premium needed" icon on 403.
-- Save rotated refresh tokens to `storage`.
+- [ ] `spotify_task` with a hard-coded refresh token:
+  - [ ] token refresh
+  - [ ] polling on `core::schedule`
+  - [ ] art download, decode and display
+- [ ] Playback buttons, with a "Premium needed" icon on 403.
+- [ ] Save rotated refresh tokens to `storage`.
 
 **Done when:** the panel follows real playback within the N-1 latency targets, and the buttons control Spotify.
 
 ### P7 — Setup portal (M4)
 
-- Soft AP `OnAir-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
-- Serve `core::portal::PAGE` and the routes listed in `core::portal` with `picoserve`. The page, form checking, sign-in session and JSON replies are already built and tested; the device supplies the WiFi scan, joining, geocoding and the token exchange.
-- Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA.
-- Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6).
-- **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction.
+- [ ] Soft AP `OnAir-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
+- [ ] Serve `core::portal::PAGE` and the routes listed in `core::portal` with `picoserve`. The page, form checking, sign-in session and JSON replies are already built and tested; the device supplies the WiFi scan, joining, geocoding and the token exchange.
+- [ ] Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA.
+- [ ] Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6).
+- [ ] **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction.
 
 **Done when:** a factory-reset device goes from first boot to showing art using only a phone.
 
@@ -250,21 +265,21 @@ Each phase lists its tasks and when it counts as done.
 
 ### P8 — Idle screens on device (M5)
 
-- Hook the `on-air-ui` idle screens to SNTP time and `weather_task`.
-- Fetch tide times in `weather_task` while the Weather + tides screen is selected (`core::tide`), and redo the city's tide check while it's still unknown, saving the answer.
-- Save the selected idle screen.
-- Mode-tap preview while music is playing.
+- [ ] Hook the `on-air-ui` idle screens to SNTP time and `weather_task`.
+- [ ] Fetch tide times in `weather_task` while the Weather + tides screen is selected (`core::tide`), and redo the city's tide check while it's still unknown, saving the answer.
+- [ ] Save the selected idle screen.
+- [ ] Mode-tap preview while music is playing.
 
 **Done when:** all the idle screens work on the panel, weather and tides refresh on schedule, a city's tide check is saved, and nothing is fetched when no weather screen is selected.
 
 ### P9 — Polish (M6)
 
-- Crossfade between covers (D-4).
-- Backoff everywhere (N-3).
-- Supervisor and watchdog (N-4).
-- Tune the current cap against the P3 measurements.
-- Boot-time check (N-2).
-- **Soak test:** run for 48 h, unplugging the router a few times and blocking Spotify.
+- [ ] Crossfade between covers (D-4).
+- [ ] Backoff everywhere (N-3).
+- [ ] Supervisor and watchdog (N-4).
+- [ ] Tune the current cap against the P3 measurements.
+- [ ] Boot-time check (N-2).
+- [ ] **Soak test:** run for 48 h, unplugging the router a few times and blocking Spotify.
 
 **Done when:** it survives the soak test with no manual reboot, and every requirement in requirements.md is checked off.
 
@@ -285,9 +300,9 @@ Each phase lists its tasks and when it counts as done.
 | # | Decision | When | Leaning |
 |---|---|---|---|
 | 1 | TLS library (R-2) | P5 | `esp-mbedtls` |
-| 2 | JSON parsing: `serde_json` + `alloc` or `serde-json-core` | P1 | `serde_json` + `alloc`. The heap is in PSRAM anyway and it's simpler. |
+| 2 | JSON parsing: `serde_json` + `alloc` or `serde-json-core` | Done | Decided: `serde_json` + `alloc`. The heap is in PSRAM anyway and it's simpler. |
 | 3 | Timezone entry in the portal | Done | Decided: the timezone comes from the city picked in the portal. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. |
-| 4 | Logging: `log` + `esp-println` or `defmt` | P0 | `log` to start, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
+| 4 | Logging: `log` + `esp-println` or `defmt` | Done | Decided: `log`, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
 | 5 | Q-4 fix for phone internet during sign-in | P7 | Decide after testing on real phones. |
 
 ## 6. After v1
