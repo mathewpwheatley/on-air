@@ -154,9 +154,9 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P0 Scaffolding | ✅ Done |
 | P1 Core logic | ✅ Done |
 | P2 UI + simulator | ✅ Done |
-| P3 Panel bring-up | In progress. The test-pattern firmware is written; check it on the panel. |
+| P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
-| P5 Network + TLS | Not started |
+| P5 Network + TLS | Next |
 | P6 Spotify on device | Not started. The logic is done in core. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
@@ -209,10 +209,10 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 ### P3 — Panel bring-up (M0)
 
 - [x] Fill in `board.rs` from Adafruit's pinout.
-- [ ] Set the address-E jumper.
-- [ ] Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test. (Written; check on the panel.)
-- [ ] Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2).
-- [ ] Bench-measure the current at full white (Q-3) and the board's temperature at 2.5 A (Q-1).
+- [x] Set the address-E jumper.
+- [x] Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test.
+- [x] Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2). No visible flicker at 6 bits; the firmware logs the measured rate.
+- [ ] **To do:** bench-measure the current at full white (Q-3) and the board's temperature at 2.5 A (Q-1). Waiting on a new meter fuse or a USB-C power meter. Measure white at a brightness below the cap (log shows the same level before and after it), subtract the board's own draw, and scale to 255. Until then the cap uses the 4000 mA estimate.
 
 **Done when:** a test pattern shows cleanly and the current numbers are recorded in requirements.md.
 
