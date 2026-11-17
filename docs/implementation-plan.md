@@ -156,7 +156,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P2 UI + simulator | ✅ Done |
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
-| P5 Network + TLS | Next |
+| P5 Network + TLS | In progress. WiFi joins and PSRAM works; SNTP, TLS and AP+STA to do. |
 | P6 Spotify on device | Not started. The logic is done in core. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
@@ -175,7 +175,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - **Intel Mac toolchain limit.** Espressif stopped publishing Xtensa Rust for Intel Macs after **1.90**, so this machine is pinned to it (`espup install --toolchain-version 1.90.0.0`). The shared crates set `rust-version = "1.88"`. Every dependency they or the firmware use must build on Rust 1.90, so check a crate's minimum Rust version before adding it. Moving to an Apple Silicon Mac or Linux later lifts this limit.
 - **`esp-rtos`.** The template uses `esp-rtos` (with its `embassy` feature) as the scheduler and the `#[esp_rtos::main]` entry point, not `embassy-executor` directly. `esp-radio` needs it.
 - **SDL2 on macOS.** `tools/sim/build.rs` adds Homebrew's lib folder to the linker search path, since recent macOS toolchains don't search it by default.
-- **PSRAM.** The template heap is about 72 KB of internal RAM. Moving the heap to PSRAM is left to P5, when TLS needs it.
+- **PSRAM.** The template heap is about 72 KB of internal RAM. Moving the heap to PSRAM is left to P5, when TLS needs it. (Done in P5: the board has 2 MB.)
 
 ### P1 — Core logic (host) ✅
 
@@ -211,7 +211,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - [x] Fill in `board.rs` from Adafruit's pinout.
 - [x] Set the address-E jumper.
 - [x] Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test.
-- [x] Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2). No visible flicker at 6 bits; the firmware logs the measured rate.
+- [x] Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2). Measured 152 Hz at 6 bits, with no visible flicker.
 - [ ] **To do:** bench-measure the current at full white (Q-3) and the board's temperature at 2.5 A (Q-1). Waiting on a new meter fuse or a USB-C power meter. Measure white at a brightness below the cap (log shows the same level before and after it), subtract the board's own draw, and scale to 255. Until then the cap uses the 4000 mA estimate.
 
 **Done when:** a test pattern shows cleanly and the current numbers are recorded in requirements.md.
@@ -219,6 +219,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 **Notes from starting P3 (2026-11-16):**
 - **Versions.** `esp-hub75` 0.16 and later need Rust 1.95, past this Mac's 1.90 limit, so the firmware uses 0.15. That needs `esp-hal` 1.1, so the esp crates moved up together to their 2026-04 releases (`esp-radio` 0.18, `esp-rtos` 0.3, `embassy-executor` 0.10 and friends), the last ones on Rust 1.88.
 - **Color depth and refresh.** A bitplane framebuffer at 6 bits per channel, clocked at 20 MHz. Each extra bit halves the refresh rate, so 8 bits would flicker. The firmware logs the measured rate every 5 s.
+- **Heap.** WiFi takes most of the template's 72 KB heap, so a second 96 KB region comes out of the otherwise-unused stack space, for the display's frame buffers.
 - **Test patterns** go through `FramePipeline::for_panel`, so gamma and the current cap apply and full white can't overdraw the supply. They cycle every 3 s: solid red, green, blue and white, then `on_air_ui::draw_test_pattern` (bars and a grey ramp) and `draw_addressing_pattern` (a colored block in each corner, to catch flipped or repeated halves).
 
 **If it fails (R-1):** try the FM6126A init sequence. If that fails too, wrap the C `ESP32-HUB75-MatrixPanel-DMA` library through `esp-idf`.
@@ -235,10 +236,15 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 ### P5 — Network + TLS spike (M2)
 
-- [ ] Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time).
+- [x] Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time). `wifi_task` runs `core::wifi::WifiLink`, with `ON_AIR_WIFI_SSID` and `ON_AIR_WIFI_PASSWORD` from `.env`, and gets an address over DHCP.
+- [x] Move the heap to PSRAM. The board has 2 MB (quad SPI), added to the heap at boot.
 - [ ] SNTP time.
 - [ ] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on.
 - [ ] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
+
+**Notes so far (2026-11-16):**
+- **Memory at boot**, with WiFi up and the test patterns running: the 72 KB internal region is 96% used (2.5 KB free), the extra 96 KB region has 72 KB free, and PSRAM's 2 MB is untouched. The allocator fills internal RAM first, so TLS buffers, JSON and covers should go to PSRAM explicitly (an allocator with `MemoryCapability::External`), keeping internal RAM for WiFi and DMA.
+- **Current cap seen working:** full white at brightness 150 is capped to 137, matching the 2150 mA budget under the 4000 mA full-white estimate.
 
 **Done when:**
 - An HTTPS GET to each host succeeds with certificates verified.

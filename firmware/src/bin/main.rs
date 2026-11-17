@@ -14,7 +14,10 @@ use esp_hal::timer::timg::TimerGroup;
 use log::info;
 
 use embassy_executor::Spawner;
-use on_air_firmware::{board, display_task, input_task};
+use embassy_net::StackResources;
+use esp_hal::rng::Rng;
+use on_air_firmware::{board, display_task, input_task, wifi_task};
+use static_cell::StaticCell;
 
 use esp_backtrace as _;
 
@@ -41,6 +44,11 @@ async fn main(spawner: Spawner) -> ! {
     // WiFi takes much of the first region. This one comes out of the
     // otherwise-unused stack space, for the display's frame buffers.
     esp_alloc::heap_allocator!(size: 96 * 1024);
+    let psram = esp_hal::psram::Psram::new(peripherals.PSRAM, Default::default());
+    let (_, psram_size) = psram.raw_parts();
+    if psram_size > 0 {
+        esp_alloc::psram_allocator!(&psram);
+    }
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let software_interrupts = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
@@ -52,9 +60,23 @@ async fn main(spawner: Spawner) -> ! {
         on_air_ui::HEIGHT
     );
 
-    let (mut _wifi_controller, _interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default())
-            .expect("Failed to initialize Wi-Fi controller");
+    info!("PSRAM: {} KB", psram_size / 1024);
+
+    let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
+        .expect("Failed to initialize Wi-Fi controller");
+    let rng = Rng::new();
+    static NET_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
+    let net_seed = (rng.random() as u64) << 32 | rng.random() as u64;
+    let (stack, net_runner) = embassy_net::new(
+        interfaces.station,
+        embassy_net::Config::dhcpv4(Default::default()),
+        NET_RESOURCES.init(StackResources::new()),
+        net_seed,
+    );
+    spawner.spawn(wifi_task::net_task(net_runner).expect("net task already running"));
+    spawner.spawn(
+        wifi_task::wifi_task(wifi_controller, rng.random()).expect("wifi task already running"),
+    );
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
     spawner.spawn(
@@ -73,6 +95,11 @@ async fn main(spawner: Spawner) -> ! {
     // After WiFi start-up and the display's first frame have allocated.
     embassy_time::Timer::after_secs(1).await;
     info!("{}", esp_alloc::HEAP.stats());
+
+    stack.wait_config_up().await;
+    if let Some(config) = stack.config_v4() {
+        info!("network: online at {}", config.address);
+    }
 
     loop {
         core::future::pending::<()>().await;

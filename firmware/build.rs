@@ -1,4 +1,5 @@
 fn main() {
+    forward_env();
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
@@ -67,4 +68,29 @@ fn linker_be_nice() {
         "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
         std::env::current_exe().unwrap().display()
     );
+}
+
+/// Pass the WiFi name and password from the repo's `.env` to the build, for
+/// `option_env!`. The environment wins over the file.
+fn forward_env() {
+    const KEYS: [&str; 2] = ["ON_AIR_WIFI_SSID", "ON_AIR_WIFI_PASSWORD"];
+    let path = std::path::Path::new("../.env");
+    println!("cargo:rerun-if-changed={}", path.display());
+    for key in KEYS {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    let from_file: Vec<(String, String)> = dotenvy::from_path_iter(path)
+        .map(|entries| entries.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    for key in KEYS {
+        let value = std::env::var(key).ok().or_else(|| {
+            from_file
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        });
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            println!("cargo:rustc-env={key}={value}");
+        }
+    }
 }

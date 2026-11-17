@@ -42,6 +42,7 @@ esp-println = { version = "0.17.0", features = ["esp32s3", "log-04"] }
 embassy-executor = { version = "0.10.0", features = ["log"] }
 embassy-time = { version = "0.5.0", features = ["log"] }
 embassy-sync = "0.7.2"
+embassy-futures = "0.1.2"
 # trail-blank-2 blanks the panel briefly after each row change, against ghosting.
 esp-hub75 = { version = "0.15", features = ["esp32s3", "log", "trail-blank-2"] }
 embedded-graphics = "0.8.2"
@@ -87,3 +88,7 @@ incremental      = false
 lto              = 'fat'
 opt-level        = 's'
 overflow-checks  = false
+
+[build-dependencies]
+# Reads the WiFi name and password from the repo's .env at build time.
+dotenvy = "0.15"
