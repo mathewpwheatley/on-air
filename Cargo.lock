@@ -1041,6 +1041,7 @@ dependencies = [
  "base64 0.22.1",
  "debouncr",
  "form_urlencoded",
+ "httparse",
  "jiff",
  "libm",
  "postcard",

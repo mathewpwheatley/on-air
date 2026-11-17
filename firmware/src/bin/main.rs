@@ -17,7 +17,7 @@ use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use esp_hal::rng::Rng;
 use on_air_firmware::{
-    board, display_task, https_check, input_task, setup_network, sntp_task, wifi_task,
+    board, display_task, https, input_task, setup_network, sntp_task, spotify_task, wifi_task,
 };
 use static_cell::StaticCell;
 use tinyrlibc as _;
@@ -104,7 +104,11 @@ async fn main(spawner: Spawner) -> ! {
             .expect("wifi task already running"),
     );
     spawner.spawn(sntp_task::sntp_task(stack, rng.random()).expect("sntp task already running"));
-    spawner.spawn(https_check::https_check_task(stack).expect("https check already running"));
+    let https_client = https::HttpsClient::start(stack);
+    spawner.spawn(
+        spotify_task::spotify_task(https_client, rng.random())
+            .expect("spotify task already running"),
+    );
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
     spawner.spawn(

@@ -73,7 +73,12 @@ fn linker_be_nice() {
 /// Pass the WiFi name and password from the repo's `.env` to the build, for
 /// `option_env!`. The environment wins over the file.
 fn forward_env() {
-    const KEYS: [&str; 2] = ["ON_AIR_WIFI_SSID", "ON_AIR_WIFI_PASSWORD"];
+    const KEYS: [&str; 4] = [
+        "ON_AIR_WIFI_SSID",
+        "ON_AIR_WIFI_PASSWORD",
+        "SPOTIFY_CLIENT_ID",
+        "ON_AIR_SPOTIFY_REFRESH_TOKEN",
+    ];
     let path = std::path::Path::new("../.env");
     println!("cargo:rerun-if-changed={}", path.display());
     for key in KEYS {
@@ -89,8 +94,30 @@ fn forward_env() {
                 .find(|(k, _)| k == key)
                 .map(|(_, v)| v.clone())
         });
-        if let Some(value) = value.filter(|v| !v.is_empty()) {
+        let value = value.filter(|v| !v.is_empty()).or_else(|| match key {
+            "ON_AIR_SPOTIFY_REFRESH_TOKEN" => simulator_refresh_token(&from_file),
+            _ => None,
+        });
+        if let Some(value) = value {
             println!("cargo:rustc-env={key}={value}");
         }
     }
+}
+
+/// The refresh token `just sim --live` saved when you signed in, if it was
+/// for the same Spotify app. macOS only, where the simulator keeps it.
+fn simulator_refresh_token(from_file: &[(String, String)]) -> Option<String> {
+    let client_id = std::env::var("SPOTIFY_CLIENT_ID").ok().or_else(|| {
+        from_file
+            .iter()
+            .find(|(k, _)| k == "SPOTIFY_CLIENT_ID")
+            .map(|(_, v)| v.clone())
+    })?;
+    let path = std::path::Path::new(&std::env::var("HOME").ok()?)
+        .join("Library/Application Support/on-air-sim/session.json");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let session: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    (session["client_id"].as_str()? == client_id)
+        .then(|| session["refresh_token"].as_str().map(String::from))
+        .flatten()
 }
