@@ -156,7 +156,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P2 UI + simulator | ✅ Done |
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
-| P5 Network + TLS | In progress. WiFi joins and PSRAM works; SNTP, TLS and AP+STA to do. |
+| P5 Network + TLS | In progress. WiFi, PSRAM and SNTP work; TLS and AP+STA to do. |
 | P6 Spotify on device | Not started. The logic is done in core. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
@@ -238,7 +238,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 - [x] Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time). `wifi_task` runs `core::wifi::WifiLink`, with `ON_AIR_WIFI_SSID` and `ON_AIR_WIFI_PASSWORD` from `.env`, and gets an address over DHCP.
 - [x] Move the heap to PSRAM. The board has 2 MB (quad SPI), added to the heap at boot.
-- [ ] SNTP time.
+- [x] SNTP time. `sntp_task` syncs from `pool.ntp.org` once online and every 4 h, retrying with backoff; `core::clock` holds the offset. `sntpc` 0.8 is the version for embassy-net 0.8, so the firmware moved up from 0.7.
 - [ ] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on.
 - [ ] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
 

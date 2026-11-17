@@ -16,7 +16,7 @@ use log::info;
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use esp_hal::rng::Rng;
-use on_air_firmware::{board, display_task, input_task, wifi_task};
+use on_air_firmware::{board, display_task, input_task, sntp_task, wifi_task};
 use static_cell::StaticCell;
 
 use esp_backtrace as _;
@@ -77,6 +77,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(
         wifi_task::wifi_task(wifi_controller, rng.random()).expect("wifi task already running"),
     );
+    spawner.spawn(sntp_task::sntp_task(stack, rng.random()).expect("sntp task already running"));
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
     spawner.spawn(

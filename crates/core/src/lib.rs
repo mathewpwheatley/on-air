@@ -11,6 +11,7 @@ extern crate alloc;
 pub mod app;
 pub mod auth;
 pub mod backoff;
+pub mod clock;
 pub mod frame;
 pub mod http;
 pub mod image;

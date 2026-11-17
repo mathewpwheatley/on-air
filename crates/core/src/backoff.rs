@@ -35,6 +35,11 @@ impl Backoff {
         Self::new(30_000, 15 * 60_000)
     }
 
+    /// Time sync retries: 5 s doubling to 15 min.
+    pub const fn time_sync() -> Self {
+        Self::new(5_000, 15 * 60_000)
+    }
+
     /// Delay before the next retry. `random` is any random number, such as
     /// a value from the hardware RNG.
     pub fn next_delay_ms(&mut self, random: u32) -> u32 {

@@ -22,8 +22,9 @@ esp-rtos = { version = "0.3.0", features = [
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3", "log-04"] }
 log                    = "0.4.27"
 
-embassy-net = { version = "0.7.1", features = [
+embassy-net = { version = "0.8.0", features = [
   "dhcpv4",
+  "dns",
   "log",
   "medium-ethernet",
   "tcp",
@@ -43,6 +44,9 @@ embassy-executor = { version = "0.10.0", features = ["log"] }
 embassy-time = { version = "0.5.0", features = ["log"] }
 embassy-sync = "0.7.2"
 embassy-futures = "0.1.2"
+# SNTP. 0.8 is the version that pairs with embassy-net 0.8.
+sntpc = { version = "0.8", default-features = false }
+sntpc-net-embassy = { version = "0.8", features = ["log"] }
 # trail-blank-2 blanks the panel briefly after each row change, against ghosting.
 esp-hub75 = { version = "0.15", features = ["esp32s3", "log", "trail-blank-2"] }
 embedded-graphics = "0.8.2"
