@@ -23,6 +23,7 @@ fn view(screen: Screen) -> View {
         notice: None,
         notice_age_ms: 0,
         no_wifi: false,
+        update_needed: false,
     }
 }
 
@@ -191,6 +192,20 @@ type Change = fn(&mut Scene);
     with_art(s);
     s.view.no_wifi = true;
 })]
+#[case::art_update_needed("art_update_needed", Screen::Art { dimmed: false }, |s: &mut Scene| {
+    with_art(s);
+    s.view.update_needed = true;
+})]
+#[case::art_update_needed_no_wifi("art_update_needed_no_wifi", Screen::Art { dimmed: false }, |s: &mut Scene| {
+    with_art(s);
+    s.view.update_needed = true;
+    s.view.no_wifi = true;
+})]
+#[case::digital_clock_update_needed(
+    "digital_clock_update_needed",
+    Screen::Idle(IdleMode::DigitalClock),
+    |s: &mut Scene| s.view.update_needed = true,
+)]
 #[case::last_song("last_song", Screen::Idle(IdleMode::LastSong), with_art)]
 // Track info.
 #[case::track_info("track_info", Screen::Art { dimmed: false }, |s: &mut Scene| {

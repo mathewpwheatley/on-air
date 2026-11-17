@@ -96,6 +96,10 @@ where
         let at = Point::new(WIDTH as i32 - width - 1, 1);
         icons::draw_outlined(icons::Icon::NoWifi, at, 1, target)?;
     }
+    if scene.view.update_needed {
+        // In the top-left corner, opposite the WiFi badge.
+        icons::draw_outlined(icons::Icon::UpdateNeeded, Point::new(1, 1), 1, target)?;
+    }
     match scene.view.notice {
         Some(Notice::TrackInfo) => screens::track_info::draw(scene, target)?,
         Some(notice) => screens::notice::draw(notice, scene.tides_available, target)?,

@@ -2,21 +2,27 @@
 //! requests over mbedtls, verifying certificates against the pinned roots
 //! in `certs/roots.pem` and checking their dates against the SNTP clock.
 
+use core::cell::RefCell;
 use core::convert::Infallible;
 use core::ffi::CStr;
 
 use alloc::ffi::CString;
+use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_net::Stack;
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, with_timeout};
 use embedded_io_async::Write;
 use esp_hal::rng::Rng;
 use log::{info, warn};
 use mbedtls_rs::sys::hook::wall_clock::{MbedtlsWallClock, hook_wall_clock};
-use mbedtls_rs::sys::tm;
-use mbedtls_rs::{Certificate, ClientSessionConfig, Session, SessionConfig, Tls, X509};
+use mbedtls_rs::sys::{MBEDTLS_ERR_X509_CERT_VERIFY_FAILED, tm};
+use mbedtls_rs::{
+    Certificate, ClientSessionConfig, Session, SessionConfig, SessionError, Tls, X509,
+};
 use on_air_core::http::{self, Decoded, NetworkError, Outcome, Request};
 use on_air_core::timezone::{self, TimeZone};
 use static_cell::StaticCell;
@@ -38,6 +44,37 @@ const CLOSE_GRACE: Duration = Duration::from_secs(1);
 /// The largest response kept. Covers are about 20 KB and Spotify's JSON a
 /// few KB.
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Hosts whose certificates were rejected on their latest handshake.
+static REJECTED_HOSTS: Mutex<CriticalSectionRawMutex, RefCell<Vec<String>>> =
+    Mutex::new(RefCell::new(Vec::new()));
+
+/// Whether any host's certificate is being rejected: expired, from a root
+/// not in `certs/roots.pem`, or for the wrong host name. A firmware update
+/// fixes it, not the WiFi.
+pub fn certificate_problem() -> bool {
+    REJECTED_HOSTS.lock(|hosts| !hosts.borrow().is_empty())
+}
+
+fn note_certificate(host: &str, rejected: bool) {
+    REJECTED_HOSTS.lock(|hosts| {
+        let mut hosts = hosts.borrow_mut();
+        let known = hosts.iter().position(|h| h == host);
+        match (rejected, known) {
+            (true, None) => {
+                warn!(
+                    "https: {host}'s certificate is rejected; the pinned roots may need updating"
+                );
+                hosts.push(host.into());
+            }
+            (false, Some(index)) => {
+                info!("https: {host}'s certificate is accepted again");
+                hosts.remove(index);
+            }
+            _ => {}
+        }
+    });
+}
 
 /// TLS randomness from the hardware RNG, which is a true random source
 /// while the radio is on.
@@ -165,10 +202,19 @@ impl HttpsClient {
         let mut session =
             Session::new(self.tls.reference(), socket, &SessionConfig::Client(config))
                 .map_err(|_| "TLS setup failed")?;
-        session.connect().await.map_err(|error| {
-            warn!("https: {} handshake: {error:?}", target.host);
-            "TLS handshake failed"
-        })?;
+        match session.connect().await {
+            Ok(()) => note_certificate(target.host, false),
+            Err(SessionError::MbedTls(error))
+                if error.code() == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED =>
+            {
+                note_certificate(target.host, true);
+                return Err("certificate rejected (expired, untrusted root or wrong host)");
+            }
+            Err(error) => {
+                warn!("https: {} handshake: {error:?}", target.host);
+                return Err("TLS handshake failed");
+            }
+        }
 
         session
             .write_all(&http::encode(request, target))

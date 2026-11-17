@@ -157,7 +157,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
 | P5 Network + TLS | ✅ Done. WiFi, PSRAM, SNTP, TLS to all five hosts, and AP+STA. |
-| P6 Spotify on device | In progress. Shows the cover from Spotify on the panel; storage, the notice and the buttons to do. |
+| P6 Spotify on device | Software done, apart from seeing a token rotation saved. Playback buttons wait on the parts. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
 | P9 Polish | Host side done. The device side is not started. |
@@ -278,7 +278,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - **Panel glitches under load:** with TLS and polling running from PSRAM, stray pixels appeared on the top row and a line through the middle. Turning on `esp-hub75`'s `iram` (driver interrupt code out of flash, so cache stalls can't delay it) and `circular-dma` (the frame loops in hardware; swaps are pointer changes) fixed them.
 - **Power:** on a laptop USB port, bright white screens flicker because the port can't supply the current. Use a 5 V / 3 A (15 W) or larger USB-C supply; the cap's calibration waits on the P3 measurement.
 
-- [ ] Tell certificate failures (expired, untrusted root, wrong host name) apart from network failures, log the host and reason, and show an "Update needed" status notice on the panel, so a host moving to an unpinned root shows as a firmware problem rather than a WiFi one.
+- [x] Tell certificate failures (expired, untrusted root, wrong host name) apart from network failures, log the host and reason, and show an "Update needed" status notice on the panel, so a host moving to an unpinned root shows as a firmware problem rather than a WiFi one. `https::HttpsClient` keeps the hosts whose handshake failed `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` (cleared on their next good handshake); `core::app` turns `Event::CertificateProblem` into `View::update_needed`, drawn as an amber padlock in the top-left corner, opposite the No WiFi badge. Snapshots: `art_update_needed`, `art_update_needed_no_wifi`, `digital_clock_update_needed`. To see it on the board, remove a root from `certs/roots.pem` and flash.
 - [ ] Save rotated refresh tokens to `storage`. Written: `storage::SettingsStore` keeps core's `Settings` in a 64 KB `settings` partition (`firmware/partitions.csv`, passed to espflash by `just flash`) with `sequential-storage`, and `spotify_task` saves each rotated token at once and signs in with the saved token before the build-time one. The partition is found and read on the board; Spotify hasn't rotated a token yet, so the save hasn't run for real.
 
 **Done when:** the panel follows real playback within the N-1 latency targets, and the buttons control Spotify.

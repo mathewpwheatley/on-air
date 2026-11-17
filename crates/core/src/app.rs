@@ -55,6 +55,10 @@ pub enum Event {
     SignedIn,
     Input(InputEvent),
     CommandFailed(CommandFailure),
+    /// Whether a server's certificate is being rejected: expired, from a
+    /// root the device doesn't trust, or for the wrong host. That needs a
+    /// firmware update rather than a WiFi fix.
+    CertificateProblem(bool),
 }
 
 /// Something for another task to do.
@@ -101,6 +105,8 @@ pub struct View {
     pub notice_age_ms: u64,
     /// Show the "No WiFi" badge.
     pub no_wifi: bool,
+    /// Show the "Update needed" badge: a server's certificate is rejected.
+    pub update_needed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +137,7 @@ pub struct App {
     preview_until: u64,
     /// The notice, when it started and when it ends.
     notice: Option<(Notice, u64, u64)>,
+    certificate_problem: bool,
 }
 
 impl App {
@@ -146,6 +153,7 @@ impl App {
             idle_after_ms: crate::settings::DEFAULT_IDLE_AFTER_MIN as u64 * 60_000,
             preview_until: 0,
             notice: None,
+            certificate_problem: false,
         }
     }
 
@@ -196,6 +204,10 @@ impl App {
                 None
             }
             Event::Input(input) => self.on_input(input, now),
+            Event::CertificateProblem(problem) => {
+                self.certificate_problem = problem;
+                None
+            }
             Event::CommandFailed(f) => {
                 let notice = match f {
                     CommandFailure::PremiumRequired => Notice::PremiumNeeded,
@@ -334,6 +346,7 @@ impl App {
             notice: notice.map(|(n, _, _)| n),
             notice_age_ms: notice.map_or(0, |(_, start, _)| now - start),
             no_wifi: self.net == NetStatus::Lost,
+            update_needed: self.certificate_problem,
         }
     }
 
@@ -607,6 +620,20 @@ mod tests {
         let v = app.view(10);
         assert_eq!(v.screen, Screen::Idle(IdleMode::DigitalClock));
         assert!(v.no_wifi);
+    }
+
+    #[test]
+    fn certificate_problem_shows_update_badge_until_cleared() {
+        let mut app = online(IdleMode::DigitalClock);
+        app.handle(track(true), 0);
+        assert!(!app.view(0).update_needed);
+        app.handle(Event::CertificateProblem(true), 10);
+        let v = app.view(10);
+        assert!(v.update_needed);
+        // The screen stays as it was.
+        assert_eq!(v.screen, ART);
+        app.handle(Event::CertificateProblem(false), 20);
+        assert!(!app.view(20).update_needed);
     }
 
     #[test]

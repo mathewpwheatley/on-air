@@ -19,6 +19,9 @@ pub enum Icon {
     Previous,
     Wifi,
     NoWifi,
+    /// A padlock: a server's certificate is rejected, so the firmware
+    /// needs an update.
+    UpdateNeeded,
     Music,
     Stale,
     /// Waves with an up arrow.
@@ -55,6 +58,7 @@ impl Icon {
             Icon::Previous => include_bytes!("../assets/icons/previous.bmp"),
             Icon::Wifi => include_bytes!("../assets/icons/wifi.bmp"),
             Icon::NoWifi => include_bytes!("../assets/icons/no_wifi.bmp"),
+            Icon::UpdateNeeded => include_bytes!("../assets/icons/update_needed.bmp"),
             Icon::Music => include_bytes!("../assets/icons/music.bmp"),
             Icon::Stale => include_bytes!("../assets/icons/stale.bmp"),
             Icon::TideHigh => include_bytes!("../assets/icons/tide_high.bmp"),
@@ -156,6 +160,7 @@ mod tests {
             Icon::Previous,
             Icon::Wifi,
             Icon::NoWifi,
+            Icon::UpdateNeeded,
             Icon::Music,
             Icon::Stale,
             Icon::TideHigh,

@@ -27,7 +27,7 @@ use static_cell::ConstStaticCell;
 
 use crate::input_task::BRIGHTNESS;
 use crate::spotify_task::{self, SpotifyUpdate};
-use crate::{sntp_task, wifi_task};
+use crate::{https, sntp_task, wifi_task};
 
 const COLUMNS: usize = on_air_ui::WIDTH as usize;
 const ROWS: usize = on_air_ui::HEIGHT as usize;
@@ -94,6 +94,7 @@ pub async fn display_task(
     let mut track: Option<NowPlaying> = None;
     let mut spotify_reachable: Option<bool> = None;
     let mut shown_net: Option<NetStatus> = None;
+    let mut shown_certificate_problem = false;
     let mut stats_from = (Instant::now(), hub75.frame_count());
     let mut ticker = Ticker::every(Duration::from_millis(FRAME_MS));
 
@@ -141,6 +142,11 @@ pub async fn display_task(
         if shown_net != Some(net) {
             shown_net = Some(net);
             app.handle(Event::Net(net), now);
+        }
+        let certificate_problem = https::certificate_problem();
+        if certificate_problem != shown_certificate_problem {
+            shown_certificate_problem = certificate_problem;
+            app.handle(Event::CertificateProblem(certificate_problem), now);
         }
 
         let scene = Scene {
