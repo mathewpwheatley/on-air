@@ -1,8 +1,9 @@
 //! Follows Spotify with `core::spotify_sync::SpotifySync`: refreshes the
 //! token, polls what's playing and downloads covers, and passes what
-//! changed to the display. Until the setup portal saves a sign-in, the
-//! client ID and refresh token come in at build time (`SPOTIFY_CLIENT_ID`
-//! and `ON_AIR_SPOTIFY_REFRESH_TOKEN`, or the token the simulator saved).
+//! changed to the display. Rotated refresh tokens are saved to flash at
+//! once. Until the setup portal saves a sign-in, the client ID and first
+//! refresh token come in at build time (`SPOTIFY_CLIENT_ID` and
+//! `ON_AIR_SPOTIFY_REFRESH_TOKEN`, or the token the simulator saved).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -11,12 +12,13 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Instant, Timer};
 use log::{info, warn};
 use on_air_core::app::CommandFailure;
-use on_air_core::settings::DEFAULT_IDLE_AFTER_MIN;
+use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, Settings};
 use on_air_core::spotify::NowPlaying;
 use on_air_core::spotify_sync::{Next, Output, SpotifySync};
 
 use crate::https::HttpsClient;
 use crate::sntp_task;
+use crate::storage::SettingsStore;
 
 const CLIENT_ID: Option<&str> = option_env!("SPOTIFY_CLIENT_ID");
 const REFRESH_TOKEN: Option<&str> = option_env!("ON_AIR_SPOTIFY_REFRESH_TOKEN");
@@ -41,20 +43,62 @@ fn now() -> u64 {
 }
 
 #[embassy_executor::task]
-pub async fn spotify_task(client: &'static HttpsClient, seed: u32) {
-    let (Some(client_id), Some(refresh_token)) = (CLIENT_ID, REFRESH_TOKEN) else {
+pub async fn spotify_task(
+    client: &'static HttpsClient,
+    store: Option<&'static SettingsStore>,
+    seed: u32,
+) {
+    let Some(client_id) = CLIENT_ID else {
         warn!(
-            "spotify: no sign-in; set SPOTIFY_CLIENT_ID and sign in with `just sim --live` \
-             (or set ON_AIR_SPOTIFY_REFRESH_TOKEN), then rebuild"
+            "spotify: no SPOTIFY_CLIENT_ID in .env; set it, sign in with `just sim --live` and rebuild"
         );
         UPDATES.send(SpotifyUpdate::SignInNeeded).await;
         return;
     };
+    // The saved token first: it's the newest if Spotify has rotated it. Then
+    // the one from the build, for a fresh sign-in with the simulator.
+    let saved = match store {
+        Some(store) => store.get().await,
+        None => Settings::default(),
+    };
+    let mut tokens: Vec<(&str, String)> = Vec::new();
+    if saved.spotify_client_id == client_id
+        && let Some(token) = saved.spotify_refresh_token
+    {
+        tokens.push(("saved", token));
+    }
+    if let Some(token) = REFRESH_TOKEN
+        && !tokens.iter().any(|(_, t)| t == token)
+    {
+        tokens.push(("build-time", token.into()));
+    }
+    if tokens.is_empty() {
+        warn!("spotify: no sign-in; sign in with `just sim --live` and rebuild");
+        UPDATES.send(SpotifyUpdate::SignInNeeded).await;
+        return;
+    }
+
     // Certificates can't be checked until the clock is set.
     while sntp_task::unix_seconds().is_none() {
         Timer::after_millis(500).await;
     }
+    for (source, token) in tokens {
+        info!("spotify: signing in with the {source} refresh token");
+        follow(client, store, client_id, &token, seed).await;
+        warn!("spotify: Spotify rejected the {source} refresh token");
+    }
+    warn!("spotify: signed out; sign in with `just sim --live` and rebuild");
+    UPDATES.send(SpotifyUpdate::SignInNeeded).await;
+}
 
+/// Follow Spotify with one refresh token, until Spotify rejects it.
+async fn follow(
+    client: &HttpsClient,
+    store: Option<&SettingsStore>,
+    client_id: &str,
+    refresh_token: &str,
+    seed: u32,
+) {
     let idle_after_ms = DEFAULT_IDLE_AFTER_MIN as u64 * 60_000;
     let mut sync = SpotifySync::new(client_id, refresh_token, idle_after_ms, seed);
     let mut last_item: Option<String> = None;
@@ -62,24 +106,38 @@ pub async fn spotify_task(client: &'static HttpsClient, seed: u32) {
         match sync.next(now()) {
             Next::Send(request) => {
                 let outcome = client.send(&request).await;
-                let mut updates = Vec::new();
-                sync.handle(now(), outcome, &mut |output| {
-                    if let Some(update) = report(output, &mut last_item) {
-                        updates.push(update);
+                let mut outputs = Vec::new();
+                sync.handle(now(), outcome, &mut |output| outputs.push(output));
+                for output in outputs {
+                    if let Output::RefreshTokenChanged(token) = &output {
+                        save_token(store, client_id, token).await;
                     }
-                });
-                for update in updates {
-                    UPDATES.send(update).await;
+                    if let Some(update) = report(output, &mut last_item) {
+                        UPDATES.send(update).await;
+                    }
                 }
             }
             // Playback buttons will wake this early once they're fitted.
             Next::Wait(ms) => Timer::after_millis(ms).await,
-            Next::Stopped => {
-                warn!("spotify: signed out; sign in with `just sim --live` and rebuild");
-                return;
-            }
+            Next::Stopped => return,
         }
     }
+}
+
+/// Save a rotated refresh token right away: Spotify may already have
+/// retired the old one.
+async fn save_token(store: Option<&SettingsStore>, client_id: &str, token: &str) {
+    let Some(store) = store else {
+        warn!("spotify: refresh token rotated, but there's no storage to save it in");
+        return;
+    };
+    info!("spotify: refresh token rotated; saving it");
+    store
+        .update(|settings| {
+            settings.spotify_client_id = client_id.into();
+            settings.spotify_refresh_token = Some(token.into());
+        })
+        .await;
 }
 
 /// Log an output and turn it into an update for the display. A track is
@@ -102,11 +160,8 @@ fn report(output: Output, last_item: &mut Option<String>) -> Option<SpotifyUpdat
             warn!("spotify: command failed: {failure:?}");
             SpotifyUpdate::CommandFailed(failure)
         }
-        // Saving it comes with the settings storage.
-        Output::RefreshTokenChanged(_) => {
-            warn!("spotify: refresh token rotated (not saved yet)");
-            return None;
-        }
+        // Saved by `follow`.
+        Output::RefreshTokenChanged(_) => return None,
         Output::Online => {
             info!("spotify: online");
             SpotifyUpdate::Reachable(true)
@@ -115,9 +170,8 @@ fn report(output: Output, last_item: &mut Option<String>) -> Option<SpotifyUpdat
             warn!("spotify: offline");
             SpotifyUpdate::Reachable(false)
         }
-        Output::SignInNeeded => {
-            warn!("spotify: Spotify rejected the refresh token");
-            SpotifyUpdate::SignInNeeded
-        }
+        // `spotify_task` tries the next token first, and tells the display
+        // only when none is left.
+        Output::SignInNeeded => return None,
     })
 }

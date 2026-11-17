@@ -9,4 +9,5 @@ pub mod input_task;
 pub mod setup_network;
 pub mod sntp_task;
 pub mod spotify_task;
+pub mod storage;
 pub mod wifi_task;
