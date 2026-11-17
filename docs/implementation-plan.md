@@ -328,4 +328,4 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 ## 6. After v1
 
-Stretch goals, such as a larger 128×128 panel and live visualizations driven by a microphone, are listed in [requirements.md §11](requirements.md#11-stretch-goals-after-v1). They get their own plan once v1 is done.
+Stretch goals, such as a larger 128×128 panel, live visualizations driven by a microphone, and reporting what failed and why (an API being down, a certificate expired or untrusted), are listed in [requirements.md §11](requirements.md#11-stretch-goals-after-v1). They get their own plan once v1 is done.

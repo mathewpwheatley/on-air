@@ -426,6 +426,20 @@ These could ship earlier as simpler live modes.
 
 **Before the hardware:** the simulator could use the Mac's microphone (the `cpal` crate) to try each visualization at 64×64, the same way the screens were designed.
 
+### 11.3 Reporting failures
+
+v1 shows a short notice on the panel when something stops working (No WiFi, Premium needed, and an "Update needed" notice for certificate failures, added in P6). Beyond that, the device could say *what* failed and *why*, so a problem can be fixed without plugging in a laptop to read the serial log.
+
+| ID | Goal | Notes |
+|---|---|---|
+| SG-13 | **Tell failures apart:** an API that's down or erroring (Spotify or Open-Meteo unreachable, timing out, or answering 5xx), a certificate that's expired or chains to a root we don't pin, a revoked Spotify sign-in, and the network itself being down. | The Spotify and weather loops in core already see each case; they'd report a reason rather than just "offline". mbedtls says why a certificate failed (expired, untrusted, wrong host name). |
+| SG-14 | **A details screen:** a button hold on the notice shows the failing host, the reason and how long it's been failing. | Small text at 64×64, scrolling like the track info screen. |
+| SG-15 | **Certificate expiry warning:** warn ahead of time when a pinned root is close to expiring. | The roots in `firmware/certs/` run to 2035–2040, so this matters more if a host moves to a root with a shorter life. The expiry dates can be read from the PEMs at build time. |
+| SG-16 | **A failure log:** the last few failures, with times, kept across restarts. | A small ring buffer in the settings partition, written rarely to spare the flash. |
+| SG-17 | **Notifications:** optionally push a message to the owner's phone when a failure lasts more than a while. | For example an `ntfy.sh` topic or a webhook, set in the portal. Off by default; it sends data off the device, so the portal should say so. |
+
+The status page can't simply be served on the home network, since N-5 keeps the portal on the setup AP only. Reporting goes through the panel, the log and, if enabled, notifications.
+
 | ID | Open question |
 |---|---|
 | Q-5 | Which MatrixPortal S3 pins are free for an I2S microphone once the knob and buttons use A0–A4? Check the Adafruit pinout. |
