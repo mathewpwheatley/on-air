@@ -157,7 +157,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
 | P5 Network + TLS | ✅ Done. WiFi, PSRAM, SNTP, TLS to all five hosts, and AP+STA. |
-| P6 Spotify on device | In progress. Follows Spotify and downloads covers; showing them, storage and the buttons to do. |
+| P6 Spotify on device | In progress. Shows the cover from Spotify on the panel; storage, the notice and the buttons to do. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
 | P9 Polish | Host side done. The device side is not started. |
@@ -267,13 +267,16 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - [ ] `spotify_task` with a hard-coded refresh token:
   - [x] token refresh
   - [x] polling on `core::schedule`
-  - [ ] art download, decode and display (download and decode work; display next)
+  - [x] art download, decode and display
 - [ ] Playback buttons, with a "Premium needed" icon on 403.
 **Notes so far (2026-11-16):**
 - **HTTP:** `core::http` gained `target`, `encode` and `decode` (HTTP/1.1 over any byte stream, with `Content-Length`, chunked bodies and `Retry-After`, parsed with `httparse`). The firmware's `https::HttpsClient` sends core requests over mbedtls with them, shared by every task.
 - **Sign-in at build time:** `SPOTIFY_CLIENT_ID` from `.env`, and `ON_AIR_SPOTIFY_REFRESH_TOKEN` from `.env` or else the token `just sim --live` saved (macOS, same client ID). Until storage saves rotated tokens, a rotation can sign out both the board and the simulator; sign in with the simulator again and rebuild.
 - **First run:** token refresh 200 in 0.7 s, polls every 5 s at 0.6–0.8 s each, the 300 px cover (42 KB) in 1.8 s, decoded to 64×64, and play and pause followed.
-- **Memory:** the first internal heap region was 99% used (196 bytes free) with this running. Large buffers (responses, covers, frames) should move to PSRAM before more is added, so WiFi keeps the internal RAM it needs.
+- **Memory:** the first internal heap region was 99% used (196 bytes free) with this running. PSRAM is now the first heap region, so ordinary allocations (TLS, responses, covers, frames) land there; WiFi and the scheduler ask for internal memory by name.
+- **On the panel:** `display_task` runs `core::app` and draws with `on_air_ui::draw`, as in the simulator, fed by a channel from `spotify_task` and the network status from `wifi_task`. The timezone and 12/24-hour clock come from `.env` at build time, else the build computer's timezone.
+- **Panel glitches under load:** with TLS and polling running from PSRAM, stray pixels appeared on the top row and a line through the middle. Turning on `esp-hub75`'s `iram` (driver interrupt code out of flash, so cache stalls can't delay it) and `circular-dma` (the frame loops in hardware; swaps are pointer changes) fixed them.
+- **Power:** on a laptop USB port, bright white screens flicker because the port can't supply the current. Use a 5 V / 3 A (15 W) or larger USB-C supply; the cap's calibration waits on the P3 measurement.
 
 - [ ] Tell certificate failures (expired, untrusted root, wrong host name) apart from network failures, log the host and reason, and show an "Update needed" status notice on the panel, so a host moving to an unpinned root shows as a firmware problem rather than a WiFi one.
 - [ ] Save rotated refresh tokens to `storage`.

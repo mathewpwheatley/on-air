@@ -60,8 +60,12 @@ edge-nal = "0.6"
 edge-nal-embassy = { version = "0.8.1", default-features = false, features = ["udp", "proto-ipv4", "medium-ethernet"] }
 # C library functions that mbedtls needs.
 tinyrlibc = { version = "0.5", default-features = false, features = ["memchr"] }
-# trail-blank-2 blanks the panel briefly after each row change, against ghosting.
-esp-hub75 = { version = "0.15", features = ["esp32s3", "log", "trail-blank-2"] }
+# trail-blank-2 blanks the panel briefly after each row change, against
+# ghosting. iram keeps the driver's interrupt code out of flash, so cache
+# stalls from WiFi, TLS and PSRAM can't delay it into visible glitches.
+# circular-dma loops the frame in hardware, so a buffer swap is a pointer
+# change rather than a DMA stop and restart.
+esp-hub75 = { version = "0.15", features = ["esp32s3", "log", "trail-blank-2", "iram", "circular-dma"] }
 embedded-graphics = "0.8.2"
 esp-radio = { version = "0.18.0", features = [
   "esp-alloc",

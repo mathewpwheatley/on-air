@@ -1,9 +1,10 @@
-//! Owns the panel. For bring-up it cycles test patterns at the brightness
-//! from the UP and DOWN buttons, through the same frame pipeline the
-//! screens will use, so gamma and the current cap apply.
+//! Owns the panel: runs the app state machine from core, draws its screen
+//! with `on-air-ui`, and passes each frame through `core::frame` for the
+//! cover crossfade, gamma, the current cap and the brightness.
 
 use alloc::boxed::Box;
 use alloc::vec;
+use alloc::vec::Vec;
 
 use embassy_time::{Duration, Instant, Ticker};
 use embedded_graphics::pixelcolor::Rgb888;
@@ -15,12 +16,18 @@ use esp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use esp_hub75::framebuffer::compute_rows;
 use esp_hub75::{Hub75, Hub75Pins16};
 use log::info;
+use on_air_core::app::{App, Event, NetStatus, Playback};
 use on_air_core::frame::FramePipeline;
 use on_air_core::image::{DEFAULT_POWER, FRAME_LEN};
-use on_air_ui::Framebuffer;
+use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, IdleMode};
+use on_air_core::spotify::NowPlaying;
+use on_air_core::timezone::{self, TimeZone};
+use on_air_ui::{Framebuffer, Scene, Track};
 use static_cell::ConstStaticCell;
 
 use crate::input_task::BRIGHTNESS;
+use crate::spotify_task::{self, SpotifyUpdate};
+use crate::{sntp_task, wifi_task};
 
 const COLUMNS: usize = on_air_ui::WIDTH as usize;
 const ROWS: usize = on_air_ui::HEIGHT as usize;
@@ -37,52 +44,15 @@ pub type PanelFrame = DmaFrameBuffer<{ compute_rows(ROWS) }, COLUMNS, PLANES>;
 static FRONT: ConstStaticCell<PanelFrame> = ConstStaticCell::new(PanelFrame::new());
 static BACK: ConstStaticCell<PanelFrame> = ConstStaticCell::new(PanelFrame::new());
 
-/// How long each bring-up pattern shows.
-const PATTERN_MS: u64 = 3_000;
-/// Redraw this often.
+/// Redraw this often: smooth enough for the crossfade and scrolling text.
 const FRAME_MS: u64 = 30;
 /// Log the refresh rate this often.
-const STATS_MS: u64 = 5_000;
+const STATS_MS: u64 = 60_000;
 
-#[derive(Debug, Clone, Copy)]
-enum Pattern {
-    Solid(&'static str, Rgb888),
-    Bars,
-    Addressing,
-}
-
-const PATTERNS: [Pattern; 6] = [
-    Pattern::Solid("red", Rgb888::RED),
-    Pattern::Solid("green", Rgb888::GREEN),
-    Pattern::Solid("blue", Rgb888::BLUE),
-    Pattern::Solid("white", Rgb888::WHITE),
-    Pattern::Bars,
-    Pattern::Addressing,
-];
-
-impl Pattern {
-    fn at(now_ms: u64) -> (usize, Pattern) {
-        let index = (now_ms / PATTERN_MS) as usize % PATTERNS.len();
-        (index, PATTERNS[index])
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Pattern::Solid(name, _) => name,
-            Pattern::Bars => "color bars and grey ramp",
-            Pattern::Addressing => "addressing: red top-left, green top-right, blue bottom-left",
-        }
-    }
-
-    fn draw(self, target: &mut Framebuffer) {
-        let result = match self {
-            Pattern::Solid(_, color) => target.clear(color),
-            Pattern::Bars => on_air_ui::draw_test_pattern(target),
-            Pattern::Addressing => on_air_ui::draw_addressing_pattern(target),
-        };
-        result.expect("framebuffer can't fail");
-    }
-}
+/// IANA timezone for the clock, from `.env` (or the build computer's) at
+/// build time, until the setup portal saves the city's.
+const TIMEZONE: Option<&str> = option_env!("ON_AIR_TIMEZONE");
+const CLOCK_24H: Option<&str> = option_env!("ON_AIR_CLOCK_24H");
 
 /// Start refreshing the panel. Returns the driver and the spare
 /// framebuffer for [`display_task`].
@@ -105,31 +75,92 @@ pub fn start_panel(
 }
 
 #[embassy_executor::task]
-pub async fn display_task(hub75: Hub75<Async, PanelFrame>, mut back: &'static mut PanelFrame) -> ! {
+pub async fn display_task(
+    hub75: Hub75<Async, PanelFrame>,
+    mut back: &'static mut PanelFrame,
+    setup_network: &'static str,
+) -> ! {
     let mut drawn = Box::new(Framebuffer::new());
     let mut shown = vec![0u8; FRAME_LEN];
     let mut pipeline = FramePipeline::for_panel(DEFAULT_POWER);
     let mut brightness = BRIGHTNESS.wait().await;
-    let mut shown_pattern = None;
+    let zone = TIMEZONE.and_then(timezone::find).unwrap_or(TimeZone::UTC);
+    let clock_24h = matches!(CLOCK_24H, Some("true" | "1"));
+    info!("display: timezone {}", TIMEZONE.unwrap_or("UTC"));
+
+    let mut app = App::new(IdleMode::DigitalClock);
+    app.set_idle_after_ms(DEFAULT_IDLE_AFTER_MIN as u64 * 60_000);
+    let mut art: Option<Vec<u8>> = None;
+    let mut track: Option<NowPlaying> = None;
+    let mut spotify_reachable: Option<bool> = None;
+    let mut shown_net: Option<NetStatus> = None;
     let mut stats_from = (Instant::now(), hub75.frame_count());
     let mut ticker = Ticker::every(Duration::from_millis(FRAME_MS));
 
     loop {
+        let now = Instant::now().as_millis();
         if let Some(level) = BRIGHTNESS.try_take() {
             brightness = level;
         }
-        let now = Instant::now().as_millis();
-        let (index, pattern) = Pattern::at(now);
-        pattern.draw(&mut drawn);
-        let rendered = pipeline.render(now, drawn.as_bytes(), brightness, &mut shown);
-        if shown_pattern != Some(index) {
-            shown_pattern = Some(index);
-            info!(
-                "pattern: {}, brightness {brightness} (after the cap: {})",
-                pattern.name(),
-                rendered.brightness
-            );
+
+        while let Ok(update) = spotify_task::UPDATES.try_receive() {
+            match update {
+                SpotifyUpdate::Art(cover) => {
+                    if cover.is_some() {
+                        pipeline.start_crossfade(now);
+                    }
+                    art = cover;
+                }
+                SpotifyUpdate::NowPlaying(Some(playing)) => {
+                    let playback = Playback::Track {
+                        is_playing: playing.is_playing,
+                        has_art: art.is_some(),
+                    };
+                    app.handle(Event::Playback(playback), now);
+                    track = Some(playing);
+                }
+                SpotifyUpdate::NowPlaying(None) => {
+                    app.handle(Event::Playback(Playback::Nothing), now);
+                    track = None;
+                }
+                SpotifyUpdate::Reachable(reachable) => spotify_reachable = Some(reachable),
+                SpotifyUpdate::SignInNeeded => {
+                    app.handle(Event::SignInNeeded, now);
+                }
+                SpotifyUpdate::CommandFailed(failure) => {
+                    app.handle(Event::CommandFailed(failure), now);
+                }
+            }
         }
+
+        // WiFi, or Spotify being out of reach while the WiFi is up.
+        let net = match (wifi_task::status(), spotify_reachable) {
+            (NetStatus::Online, Some(false)) => NetStatus::Lost,
+            (status, _) => status,
+        };
+        if shown_net != Some(net) {
+            shown_net = Some(net);
+            app.handle(Event::Net(net), now);
+        }
+
+        let scene = Scene {
+            view: app.view(now),
+            art: art.as_deref(),
+            time: sntp_task::unix_seconds().and_then(|s| timezone::local_time(&zone, s)),
+            clock_24h,
+            weather: None,
+            tides_available: app.tides_available(),
+            tides: None,
+            track: track.as_ref().map(|t| Track {
+                title: &t.title,
+                artist: &t.artist,
+                album: t.album.as_deref(),
+            }),
+            setup_network,
+            now_ms: now,
+        };
+        on_air_ui::draw(&scene, &mut *drawn).expect("framebuffer can't fail");
+        pipeline.render(now, drawn.as_bytes(), brightness, &mut shown);
 
         for (i, pixel) in shown.as_chunks::<3>().0.iter().enumerate() {
             let point = Point::new((i % COLUMNS) as i32, (i / COLUMNS) as i32);
@@ -153,7 +184,7 @@ pub async fn display_task(hub75: Hub75<Async, PanelFrame>, mut back: &'static mu
         if since.elapsed().as_millis() >= STATS_MS {
             let count = hub75.frame_count();
             let hz = (count.wrapping_sub(frames) as u64 * 1000) / since.elapsed().as_millis();
-            info!("panel refresh: {hz} Hz");
+            info!("panel refresh: {hz} Hz, brightness {brightness}");
             stats_from = (Instant::now(), count);
         }
         ticker.next().await;

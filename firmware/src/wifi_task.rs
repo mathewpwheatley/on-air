@@ -2,15 +2,18 @@
 //! setup portal saves a network, the name and password come from `.env` at
 //! build time (`ON_AIR_WIFI_SSID` and `ON_AIR_WIFI_PASSWORD`).
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::cell::Cell;
 
 use embassy_futures::select::{Either, select};
 use embassy_net::Runner;
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use esp_radio::wifi::ap::AccessPointConfig;
 use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{Config, Interface, WifiController};
 use log::{info, warn};
+use on_air_core::app::NetStatus;
 use on_air_core::wifi::{JOIN_ATTEMPT_MS, WifiEvent, WifiLink, WifiNext};
 
 const SSID: Option<&str> = option_env!("ON_AIR_WIFI_SSID");
@@ -19,11 +22,21 @@ const PASSWORD: &str = match option_env!("ON_AIR_WIFI_PASSWORD") {
     None => "",
 };
 
-static ONLINE: AtomicBool = AtomicBool::new(false);
+static STATUS: Mutex<CriticalSectionRawMutex, Cell<NetStatus>> =
+    Mutex::new(Cell::new(NetStatus::Connecting));
+
+/// The home network's state, as `WifiLink` sees it.
+pub fn status() -> NetStatus {
+    STATUS.lock(Cell::get)
+}
 
 /// Whether the board is joined to the home network.
 pub fn is_online() -> bool {
-    ONLINE.load(Ordering::Relaxed)
+    status() == NetStatus::Online
+}
+
+fn publish(link: &WifiLink) {
+    STATUS.lock(|status| status.set(link.status()));
 }
 
 /// For the P5 AP+STA test the setup network stays up alongside the home
@@ -46,6 +59,7 @@ pub async fn wifi_task(
 ) -> ! {
     let ssid = SSID.filter(|s| !s.is_empty());
     let mut link = WifiLink::new(ssid.is_some(), now(), seed);
+    publish(&link);
     let config = match ssid {
         Some(ssid) => Config::AccessPointStation(
             StationConfig::default()
@@ -84,10 +98,11 @@ pub async fn wifi_task(
                     }
                 };
                 link.handle(now(), event);
-                ONLINE.store(event == WifiEvent::Joined, Ordering::Relaxed);
+                publish(&link);
                 info!("wifi: {:?}", link.status());
             }
             WifiNext::StartPortal => {
+                publish(&link);
                 // The setup portal comes in P7.
                 warn!("wifi: would open the setup hotspot now; not built yet");
             }
@@ -120,8 +135,8 @@ pub async fn wifi_task(
 
 fn on_drop(link: &mut WifiLink) {
     warn!("wifi: connection dropped");
-    ONLINE.store(false, Ordering::Relaxed);
     link.handle(now(), WifiEvent::Failed);
+    publish(link);
 }
 
 /// Runs a network stack: DHCP, ARP and the sockets. One for the home

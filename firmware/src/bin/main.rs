@@ -45,15 +45,17 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
-    // WiFi takes much of the first region. This one comes out of the
-    // otherwise-unused stack space, for the display's frame buffers.
-    esp_alloc::heap_allocator!(size: 96 * 1024);
+    // PSRAM first, so ordinary allocations (TLS, responses, covers, frames)
+    // land there. WiFi and the scheduler ask for internal memory by name, so
+    // the internal regions stay free for them.
     let psram = esp_hal::psram::Psram::new(peripherals.PSRAM, Default::default());
     let (_, psram_size) = psram.raw_parts();
     if psram_size > 0 {
         esp_alloc::psram_allocator!(&psram);
     }
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
+    // More internal RAM, from the otherwise-unused stack space.
+    esp_alloc::heap_allocator!(size: 96 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let software_interrupts = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
@@ -121,7 +123,8 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.DMA_CH0,
     );
     spawner.spawn(
-        display_task::display_task(hub75, spare_frame).expect("display task already running"),
+        display_task::display_task(hub75, spare_frame, setup_network_name)
+            .expect("display task already running"),
     );
 
     // After WiFi start-up and the display's first frame have allocated.

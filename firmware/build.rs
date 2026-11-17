@@ -73,11 +73,13 @@ fn linker_be_nice() {
 /// Pass the WiFi name and password from the repo's `.env` to the build, for
 /// `option_env!`. The environment wins over the file.
 fn forward_env() {
-    const KEYS: [&str; 4] = [
+    const KEYS: [&str; 6] = [
         "ON_AIR_WIFI_SSID",
         "ON_AIR_WIFI_PASSWORD",
         "SPOTIFY_CLIENT_ID",
         "ON_AIR_SPOTIFY_REFRESH_TOKEN",
+        "ON_AIR_TIMEZONE",
+        "ON_AIR_CLOCK_24H",
     ];
     let path = std::path::Path::new("../.env");
     println!("cargo:rerun-if-changed={}", path.display());
@@ -96,12 +98,22 @@ fn forward_env() {
         });
         let value = value.filter(|v| !v.is_empty()).or_else(|| match key {
             "ON_AIR_SPOTIFY_REFRESH_TOKEN" => simulator_refresh_token(&from_file),
+            "ON_AIR_TIMEZONE" => this_computers_timezone(),
             _ => None,
         });
         if let Some(value) = value {
             println!("cargo:rustc-env={key}={value}");
         }
     }
+}
+
+/// This computer's IANA timezone, like the simulator's default. macOS and
+/// Linux link `/etc/localtime` into the zoneinfo database.
+fn this_computers_timezone() -> Option<String> {
+    let target = std::fs::read_link("/etc/localtime").ok()?;
+    let target = target.to_str()?;
+    let (_, name) = target.split_once("zoneinfo/")?;
+    Some(name.to_string())
 }
 
 /// The refresh token `just sim --live` saved when you signed in, if it was
