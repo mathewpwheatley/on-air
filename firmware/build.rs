@@ -105,8 +105,32 @@ fn forward_env() {
             "ON_AIR_TIMEZONE" => this_computers_timezone(),
             _ => None,
         });
+        if key == "ON_AIR_SPOTIFY_RELAY" {
+            require_relay(value.as_deref());
+        }
         if let Some(value) = value {
             println!("cargo:rustc-env={key}={value}");
+        }
+    }
+}
+
+/// Spotify sign-in comes back through the relay page, so a build without its
+/// address would leave the board unable to sign in. Stop the build instead.
+fn require_relay(value: Option<&str>) {
+    match value {
+        Some(url) if url.starts_with("https://") && url.ends_with('/') => {}
+        Some(url) => {
+            println!(
+                "cargo::error=ON_AIR_SPOTIFY_RELAY must be the relay page's https:// address, \
+                 ending in /, exactly as registered in the Spotify app (got {url:?})"
+            );
+        }
+        None => {
+            println!(
+                "cargo::error=ON_AIR_SPOTIFY_RELAY isn't set. Publish tools/spotify-relay \
+                 (see its README) and put its address in .env, e.g. \
+                 ON_AIR_SPOTIFY_RELAY=https://<your-github-name>.github.io/on-air/"
+            );
         }
     }
 }

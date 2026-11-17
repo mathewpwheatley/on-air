@@ -364,6 +364,9 @@ pub struct Status {
     /// Phones may close the portal window when the browser opens. The link
     /// holds nothing secret: the PKCE verifier stays on the device.
     pub spotify_pending_url: Option<String>,
+    /// The redirect URI sign-ins use, which the owner registers in their
+    /// Spotify app: the relay page, or the loopback address.
+    pub spotify_redirect_uri: String,
 }
 
 impl Status {
@@ -387,6 +390,7 @@ impl Status {
             idle_minutes: settings.idle_after_min,
             tides: tides_name(settings.tides),
             spotify_pending_url: None,
+            spotify_redirect_uri: auth::REDIRECT_URI.into(),
         }
     }
 
@@ -731,8 +735,11 @@ impl Portal {
             (Method::Get, "/") => Handled::Reply(Reply::Page),
             (Method::Get, p) if is_captive_probe(p) => Handled::Reply(Reply::Redirect),
             (Method::Get, "/api/status") => {
-                let status = Status::new(&self.settings, &self.network_name, self.wifi)
+                let mut status = Status::new(&self.settings, &self.network_name, self.wifi)
                     .with_pending_sign_in(self.sign_in.as_ref());
+                if let Some(relay) = &self.relay {
+                    status.spotify_redirect_uri = relay.url.clone();
+                }
                 json(status.to_json())
             }
             (Method::Get, "/api/networks") => json(networks_json(&self.networks)),
@@ -1605,6 +1612,18 @@ mod tests {
             .unwrap()
             .trim_end_matches("\"}");
         assert!(state.ends_with(".192.168.1.17"), "{state}");
+        // The page tells the owner which redirect URI to register.
+        let Handled::Reply(Reply::Json(status)) =
+            portal.handle_home(Method::Get, "/api/status", "", &mut random, &mut |e| {
+                events.push(e)
+            })
+        else {
+            panic!()
+        };
+        assert!(
+            status.contains(r#""spotify_redirect_uri":"https://example.github.io/on-air-signin/""#),
+            "{status}"
+        );
 
         // A stale or forged state gets a page saying so, and no fetch.
         let Handled::Reply(Reply::Html(refused)) = portal.handle_home(

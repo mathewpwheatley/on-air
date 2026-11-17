@@ -133,7 +133,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
         <summary>First time? Create a Spotify app</summary>
         <ol>
           <li>Open <a class="external" href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and create an app.</li>
-          <li>Add this redirect URI: <code>http://127.0.0.1:8888/callback</code></li>
+          <li>Add this redirect URI: <code id="redirect-uri">http://127.0.0.1:8888/callback</code></li>
           <li>Tick <b>Web API</b>, save, and copy the app's <b>Client ID</b>.</li>
         </ol>
       </details>
@@ -145,7 +145,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
         <div class="status" id="spotify-status"></div>
       </form>
       <form id="spotify-finish" class="hidden">
-        <p class="hint">
+        <p class="hint" id="paste-hint">
           Approve in your browser. It then shows a page that can't load: copy
           that page's address and paste it here.
         </p>
@@ -153,7 +153,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
         <textarea id="callback-url" autocapitalize="off" spellcheck="false" placeholder="http://127.0.0.1:8888/callback?code=…"></textarea>
         <button class="action" type="submit">Finish sign-in</button>
         <div class="status" id="finish-status"></div>
-        <details class="hint">
+        <details class="hint" id="browser-help">
           <summary>Browser didn't open?</summary>
           <a id="authorize-link" class="external" target="_blank" rel="noopener">Open Spotify sign-in</a>, or copy this link into your browser:
           <textarea id="authorize-url" readonly rows="3"></textarea>
@@ -226,6 +226,8 @@ for (const id of ["#step-wifi", "#step-spotify", "#step-display", "#finish"]) {
   if (!STEPS.includes(id) && !(id === "#finish" && !HOME)) $(id).classList.add("hidden");
 }
 if (HOME) {
+  // Spotify opens in this same tab here, so there's no other browser to open.
+  $("#browser-help").classList.add("hidden");
   $("h1").textContent = "On-Air: Spotify sign-in";
   $(".sub").textContent = "Sign in so On-Air can show what you're playing.";
 }
@@ -315,9 +317,14 @@ async function loadStatus() {
   $("#client-id").value = s.spotify_client_id || "";
   // The app instructions are only needed the first time.
   $("#spotify-help").open = !s.spotify_client_id;
-  // A sign-in waiting for its pasted address: go straight to the paste box.
-  // Starting a new one would cancel the approval already given.
-  if (s.spotify_pending_url && !s.spotify_signed_in) showPaste(s.spotify_pending_url);
+  $("#redirect-uri").textContent = s.spotify_redirect_uri;
+  // With the relay page, Spotify comes straight back to On-Air: no paste.
+  state.relay = !!s.spotify_redirect_uri && !s.spotify_redirect_uri.startsWith("http://127.0.0.1");
+  // Without it, a sign-in waiting for its pasted address goes straight to
+  // the paste box: starting a new one would cancel the approval given.
+  if (s.spotify_pending_url && !s.spotify_signed_in && !state.relay) {
+    showPaste(s.spotify_pending_url);
+  }
   if (s.city) {
     const keep = $("#keep-place");
     keep.querySelector("span").textContent = `Keep ${s.city}`;
@@ -428,7 +435,9 @@ $("#spotify-start").addEventListener("submit", (e) => working(e, async () => {
     return;
   }
   setStatus($("#spotify-status"), "");
-  showPaste(reply.authorize_url);
+  // The relay brings Spotify straight back to On-Air; only without it does
+  // the owner paste the address.
+  if (!state.relay) showPaste(reply.authorize_url);
   $("#callback-url").value = "";
   setStatus($("#finish-status"), "");
   // On the home network this browser has internet, so Spotify opens right

@@ -27,5 +27,4 @@ from the On-Air repository:
 5. Put the same address in On-Air's `.env` as `ON_AIR_SPOTIFY_RELAY` and
    flash.
 
-Without `ON_AIR_SPOTIFY_RELAY`, sign-in falls back to pasting the callback
-address by hand.
+`ON_AIR_SPOTIFY_RELAY` is required: the firmware build stops without it.

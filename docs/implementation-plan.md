@@ -158,7 +158,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
 | P5 Network + TLS | ✅ Done. WiFi, PSRAM, SNTP, TLS to all five hosts, and AP+STA. |
 | P6 Spotify on device | Software done, apart from seeing a token rotation saved. Playback buttons wait on the parts. |
-| P7 Setup portal | On the device: the portal opens on a phone, scans and joins WiFi. The Spotify sign-in and a factory-fresh run-through to test. |
+| P7 Setup portal | ✅ Works end to end on a Pixel 8. Factory reset by button and an iPhone still to try. |
 | P8 Idle screens | Weather and tides work on the panel. Saving the idle screen and the preview wait on the Mode button. |
 | P9 Polish | Host side done. The device side is not started. |
 
@@ -283,19 +283,22 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 **Done when:** the panel follows real playback within the N-1 latency targets, and the buttons control Spotify.
 
-### P7 — Setup portal (M4)
+### P7 — Setup portal (M4) ✅
 
 - [x] Soft AP `OnAir-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`). DHCP also names the board as DNS server and sends the captive-portal URL (RFC 8910); a Pixel 8 opens "Sign in to network" by itself.
 - [x] Serve `core::portal::PAGE` and the routes listed in `core::portal`. A small server on `core::http::decode_request` and `encode_response` (three tasks, since phones open several connections) instead of `picoserve`; the WiFi scan and joining are in `wifi_task`, the fetches go through `https::HttpsClient`.
-- [x] Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA. Moved to the home network: a phone on the setup network can't reach Spotify (Android ties its browser to that network and Chrome's captive-portal check sends it back to the portal). Setup is now WiFi and the display; then the panel shows a "SPOTIFY SIGN IN" QR code for `http://<board>/spotify`, served on the home network by `Portal::handle_home` only while nobody is signed in (a narrow N-5 exception). Works on a Pixel 8, with the callback address pasted back. To drop the paste, an HTTPS relay page (`tools/spotify-relay`, published by `.github/workflows/spotify-relay.yml` to GitHub Pages and set as `ON_AIR_SPOTIFY_RELAY`) is Spotify's redirect: it forwards the browser to the board's `/spotify/callback`, with the board's address carried in `state`. Written; test once the page is published.
-- [ ] Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6). Written: the portal saves its settings on each change and restarts after Finish; holding UP and DOWN for 5 s reopens it until the Mode button is fitted. Factory reset waits on the buttons (`just erase-settings` meanwhile).
-- [x] **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction. Decided (Android tested): Spotify sign-in opens in the phone's own browser over mobile data (an `intent://` link on Android), with the paste-back flow; a hosted HTTPS relay page that would remove the paste was considered and set aside for now. iPhone still to test.
+- [x] Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA. Moved to the home network: a phone on the setup network can't reach Spotify (Android ties its browser to that network and Chrome's captive-portal check sends it back to the portal). Setup is now WiFi and the display; then the panel shows a "SPOTIFY SIGN IN" QR code for `http://<board>/spotify`, served on the home network by `Portal::handle_home` only while nobody is signed in (a narrow N-5 exception). Spotify's redirect is an HTTPS relay page (`tools/spotify-relay`, published by `.github/workflows/spotify-relay.yml` to GitHub Pages), which forwards the browser to the board's `/spotify/callback`, with the board's address carried in `state`, so nothing is pasted. Works on a Pixel 8. `ON_AIR_SPOTIFY_RELAY` is required: `build.rs` stops the build without it.
+- [x] Settings saved, then a reboot, and the long press that reopens the portal (P-6). The portal saves its settings on each change and restarts after Finish; holding UP and DOWN for 5 s reopens it until the Mode button is fitted.
+- [ ] Factory reset by long press (P-6). Waits on the buttons; `just erase-settings` meanwhile.
+- [x] **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction. Decided (Android tested): none of those; Spotify sign-in moved off the setup network. After setup, the panel's QR code opens the board's sign-in page on the home network, where the phone has internet, and the relay page brings Spotify back to the board. iPhone still to test.
 
 **Notes so far (2026-11-16):**
 - **Which settings run:** `firmware/src/config.rs`. Once the portal has saved a WiFi network its settings are used as they are; until then `.env` fills the gaps, for development.
 - **The setup network only runs while the portal is open** (no network saved, the saved one can't be joined within 30 s of boot, or UP and DOWN held), per N-5.
 - **Single-radio limits:** joining the home network moves the setup network to its channel, which drops phones, so the setup network starts on the home network's channel (scanned first). esp-radio's `set_config` restarts the access point, so joining from the portal changes only the station's settings through the driver (`esp-wifi-sys-esp32s3`, pinned to esp-radio's version). Scanning takes the radio off-channel for seconds, so the portal scans only before the setup network comes up, or when it has no list.
-- **Page:** spinners on buttons that wait on the board, stepping dots while networks load, and a shorter Spotify step (instructions folded away once a client ID is saved).
+- **Page:** one page in two modes: the setup portal at `/` (WiFi, then display settings) and the Spotify sign-in at `/spotify` on the home network. Spinners on buttons that wait on the board, stepping dots while networks load, and the Spotify app instructions (with the redirect URI to register) folded away once a client ID is saved.
+- **Sign-in screen:** a "SPOTIFY SIGN IN" QR code for `http://<board>/spotify`. LED panels can be hard for phone cameras: lower the brightness or scan from further back. A Spotify sign-in from the portal that Spotify later rejects is cleared, and the board restarts to show the code again.
+- **Done when** is met on a Pixel 8: after `just erase-settings`, the phone took the board from the setup network through sign-in to showing music. Factory reset by button and an iPhone are still to try.
 
 **Done when:** a factory-reset device goes from first boot to showing art using only a phone.
 
@@ -343,7 +346,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | 2 | JSON parsing: `serde_json` + `alloc` or `serde-json-core` | Done | Decided: `serde_json` + `alloc`. The heap is in PSRAM anyway and it's simpler. |
 | 3 | Timezone entry in the portal | Done | Decided: the timezone comes from the city picked in the portal. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. |
 | 4 | Logging: `log` + `esp-println` or `defmt` | Done | Decided: `log`, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
-| 5 | Q-4 fix for phone internet during sign-in | P7 | Decide after testing on real phones. |
+| 5 | Q-4 fix for phone internet during sign-in | Done | Decided: sign in on the home network from the panel's QR code, with an HTTPS relay page as Spotify's redirect. |
 
 ## 6. After v1
 

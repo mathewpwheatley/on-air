@@ -131,48 +131,22 @@ where
     Ok(())
 }
 
-/// Spotify isn't signed in. With `url` (the board's sign-in page on the home
-/// network), a QR code to scan with a phone on the same WiFi; without it,
-/// how to reach setup.
+/// Spotify isn't signed in: a QR code for the board's sign-in page on the
+/// home network (`url`), to scan with a phone on the same WiFi. Until the
+/// board knows its address, just the label.
 pub fn sign_in_needed<D>(url: Option<&str>, target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
 {
     if let Some(url) = url {
         draw_qr(url, 56, target)?;
-        text::draw(
-            &TINY,
-            "SPOTIFY SIGN IN",
-            Point::new(32, 61),
-            Align::Center,
-            WHITE,
-            target,
-        )?;
-        return Ok(());
     }
-    icons::draw_centered(Icon::Music, 32, 6, 2, target)?;
     text::draw(
-        &SMALL,
-        "SIGN IN",
-        Point::new(32, 34),
+        &TINY,
+        "SPOTIFY SIGN IN",
+        Point::new(32, 61),
         Align::Center,
         WHITE,
-        target,
-    )?;
-    text::draw(
-        &TINY,
-        "HOLD MODE",
-        Point::new(32, 46),
-        Align::Center,
-        GREY,
-        target,
-    )?;
-    text::draw(
-        &TINY,
-        "TO SET UP",
-        Point::new(32, 54),
-        Align::Center,
-        GREY,
         target,
     )?;
     Ok(())

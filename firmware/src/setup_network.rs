@@ -251,15 +251,12 @@ async fn handle(shared: &PortalShared, request: IncomingRequest) -> (Vec<u8>, bo
         let mut random = |buffer: &mut [u8]| rng.read(buffer);
         let mut emit = |event| events.push(event);
         if let Some(stack) = shared.home {
-            // Sign-ins come back through the relay page when there is one,
-            // which needs the board's current address.
-            let relay = config::SPOTIFY_RELAY
-                .filter(|url| !url.is_empty())
-                .zip(stack.config_v4())
-                .map(|(url, address)| Relay {
-                    url: url.into(),
-                    device_host: format!("{}", address.address.address()),
-                });
+            // Sign-ins come back through the relay page, which needs the
+            // board's current address.
+            let relay = stack.config_v4().map(|address| Relay {
+                url: config::SPOTIFY_RELAY.into(),
+                device_host: format!("{}", address.address.address()),
+            });
             portal.set_relay(relay);
             portal.handle_home(method, &request.target, &body, &mut random, &mut emit)
         } else {
