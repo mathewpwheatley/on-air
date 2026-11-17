@@ -158,9 +158,60 @@ where
     Ok(())
 }
 
+/// Bring-up addressing check: a white one-pixel border, a red block in the
+/// top-left corner, green top-right, blue bottom-left and white
+/// bottom-right, and a grey line across the middle. A mirrored, flipped or
+/// half-missing image shows at a glance; without the E address line, the
+/// bottom half repeats the top.
+pub fn draw_addressing_pattern<D>(target: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb888>,
+{
+    const BLOCK: u32 = 8;
+    target.clear(Rgb888::BLACK)?;
+    let edges = [
+        Rectangle::new(Point::zero(), Size::new(WIDTH, 1)),
+        Rectangle::new(Point::new(0, HEIGHT as i32 - 1), Size::new(WIDTH, 1)),
+        Rectangle::new(Point::zero(), Size::new(1, HEIGHT)),
+        Rectangle::new(Point::new(WIDTH as i32 - 1, 0), Size::new(1, HEIGHT)),
+    ];
+    for edge in edges {
+        target.fill_solid(&edge, Rgb888::WHITE)?;
+    }
+    let far_x = (WIDTH - BLOCK) as i32;
+    let far_y = (HEIGHT - BLOCK) as i32;
+    let corners = [
+        (Point::new(0, 0), Rgb888::RED),
+        (Point::new(far_x, 0), Rgb888::GREEN),
+        (Point::new(0, far_y), Rgb888::BLUE),
+        (Point::new(far_x, far_y), Rgb888::WHITE),
+    ];
+    for (top_left, color) in corners {
+        target.fill_solid(&Rectangle::new(top_left, Size::new(BLOCK, BLOCK)), color)?;
+    }
+    target.fill_solid(
+        &Rectangle::new(Point::new(0, HEIGHT as i32 / 2), Size::new(WIDTH, 1)),
+        Rgb888::new(128, 128, 128),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addressing_pattern_marks_each_corner() {
+        let mut fb = Framebuffer::new();
+        draw_addressing_pattern(&mut fb).unwrap();
+
+        assert_eq!(fb.pixel(2, 2), Rgb888::RED);
+        assert_eq!(fb.pixel(61, 2), Rgb888::GREEN);
+        assert_eq!(fb.pixel(2, 61), Rgb888::BLUE);
+        assert_eq!(fb.pixel(61, 61), Rgb888::WHITE);
+        assert_eq!(fb.pixel(32, 0), Rgb888::WHITE);
+        assert_eq!(fb.pixel(32, 32), Rgb888::new(128, 128, 128));
+        assert_eq!(fb.pixel(32, 16), Rgb888::BLACK);
+    }
 
     #[test]
     fn test_pattern_bars_and_ramp() {

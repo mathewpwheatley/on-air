@@ -154,7 +154,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P0 Scaffolding | ✅ Done |
 | P1 Core logic | ✅ Done |
 | P2 UI + simulator | ✅ Done |
-| P3 Panel bring-up | Next |
+| P3 Panel bring-up | In progress. The test-pattern firmware is written; check it on the panel. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
 | P5 Network + TLS | Not started |
 | P6 Spotify on device | Not started. The logic is done in core. |
@@ -208,12 +208,18 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 ### P3 — Panel bring-up (M0)
 
-- [ ] Fill in `board.rs` from Adafruit's pinout. Set the address-E jumper. (It has the UP and DOWN buttons so far.)
-- [ ] Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test.
+- [x] Fill in `board.rs` from Adafruit's pinout.
+- [ ] Set the address-E jumper.
+- [ ] Drive the panel with `esp-hub75`: solid colors, then a gradient and a pixel-addressing test. (Written; check on the panel.)
 - [ ] Check for flicker at 100 Hz or more, and the 6+ bit color depth (D-1, D-2).
 - [ ] Bench-measure the current at full white (Q-3) and the board's temperature at 2.5 A (Q-1).
 
 **Done when:** a test pattern shows cleanly and the current numbers are recorded in requirements.md.
+
+**Notes from starting P3 (2026-11-16):**
+- **Versions.** `esp-hub75` 0.16 and later need Rust 1.95, past this Mac's 1.90 limit, so the firmware uses 0.15. That needs `esp-hal` 1.1, so the esp crates moved up together to their 2026-04 releases (`esp-radio` 0.18, `esp-rtos` 0.3, `embassy-executor` 0.10 and friends), the last ones on Rust 1.88.
+- **Color depth and refresh.** A bitplane framebuffer at 6 bits per channel, clocked at 20 MHz. Each extra bit halves the refresh rate, so 8 bits would flicker. The firmware logs the measured rate every 5 s.
+- **Test patterns** go through `FramePipeline::for_panel`, so gamma and the current cap apply and full white can't overdraw the supply. They cycle every 3 s: solid red, green, blue and white, then `on_air_ui::draw_test_pattern` (bars and a grey ramp) and `draw_addressing_pattern` (a colored block in each corner, to catch flipped or repeated halves).
 
 **If it fails (R-1):** try the FM6126A init sequence. If that fails too, wrap the C `ESP32-HUB75-MatrixPanel-DMA` library through `esp-idf`.
 

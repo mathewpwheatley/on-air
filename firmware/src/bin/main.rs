@@ -8,13 +8,13 @@
 #![deny(clippy::large_stack_frames)]
 
 use esp_hal::clock::CpuClock;
+use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::timer::timg::TimerGroup;
 
 use log::info;
 
 use embassy_executor::Spawner;
-use on_air_firmware::board;
-use on_air_firmware::input_task::{self, BRIGHTNESS};
+use on_air_firmware::{board, display_task, input_task};
 
 use esp_backtrace as _;
 
@@ -38,9 +38,13 @@ async fn main(spawner: Spawner) -> ! {
     let peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
+    // WiFi takes much of the first region. This one comes out of the
+    // otherwise-unused stack space, for the display's frame buffers.
+    esp_alloc::heap_allocator!(size: 96 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0);
+    let software_interrupts = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, software_interrupts.software_interrupt0);
 
     info!(
         "Embassy initialized! Panel is {}x{}",
@@ -48,16 +52,29 @@ async fn main(spawner: Spawner) -> ! {
         on_air_ui::HEIGHT
     );
 
-    let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let (mut _wifi_controller, _interfaces) =
-        esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
+        esp_radio::wifi::new(peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
-    spawner.must_spawn(input_task::knob_buttons_task(knob_buttons));
+    spawner.spawn(
+        input_task::knob_buttons_task(knob_buttons).expect("knob buttons task already running"),
+    );
 
-    // Until the panel is driven, log the brightness instead.
+    let (hub75, spare_frame) = display_task::start_panel(
+        peripherals.LCD_CAM,
+        on_air_firmware::panel_pins!(peripherals),
+        peripherals.DMA_CH0,
+    );
+    spawner.spawn(
+        display_task::display_task(hub75, spare_frame).expect("display task already running"),
+    );
+
+    // After WiFi start-up and the display's first frame have allocated.
+    embassy_time::Timer::after_secs(1).await;
+    info!("{}", esp_alloc::HEAP.stats());
+
     loop {
-        info!("brightness: {}", BRIGHTNESS.wait().await);
+        core::future::pending::<()>().await;
     }
 }
