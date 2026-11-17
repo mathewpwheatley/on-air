@@ -2,9 +2,12 @@
 //! setup portal saves a network, the name and password come from `.env` at
 //! build time (`ON_AIR_WIFI_SSID` and `ON_AIR_WIFI_PASSWORD`).
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_futures::select::{Either, select};
 use embassy_net::Runner;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
+use esp_radio::wifi::ap::AccessPointConfig;
 use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{Config, Interface, WifiController};
 use log::{info, warn};
@@ -16,24 +19,48 @@ const PASSWORD: &str = match option_env!("ON_AIR_WIFI_PASSWORD") {
     None => "",
 };
 
+static ONLINE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the board is joined to the home network.
+pub fn is_online() -> bool {
+    ONLINE.load(Ordering::Relaxed)
+}
+
+/// For the P5 AP+STA test the setup network stays up alongside the home
+/// network. P7 brings it up only while setting up.
+fn access_point(network_name: &str) -> AccessPointConfig {
+    AccessPointConfig::default()
+        .with_ssid(network_name)
+        .with_max_connections(4)
+}
+
 fn now() -> u64 {
     Instant::now().as_millis()
 }
 
 #[embassy_executor::task]
-pub async fn wifi_task(mut controller: WifiController<'static>, seed: u32) -> ! {
+pub async fn wifi_task(
+    mut controller: WifiController<'static>,
+    seed: u32,
+    network_name: &'static str,
+) -> ! {
     let ssid = SSID.filter(|s| !s.is_empty());
     let mut link = WifiLink::new(ssid.is_some(), now(), seed);
-    match ssid {
-        Some(ssid) => {
-            let config = StationConfig::default()
+    let config = match ssid {
+        Some(ssid) => Config::AccessPointStation(
+            StationConfig::default()
                 .with_ssid(ssid)
-                .with_password(PASSWORD.into());
-            if let Err(error) = controller.set_config(&Config::Station(config)) {
-                warn!("wifi: couldn't set up the station: {error:?}");
-            }
+                .with_password(PASSWORD.into()),
+            access_point(network_name),
+        ),
+        None => {
+            warn!("wifi: no network saved; set ON_AIR_WIFI_SSID in .env and rebuild");
+            Config::AccessPoint(access_point(network_name))
         }
-        None => warn!("wifi: no network saved; set ON_AIR_WIFI_SSID in .env and rebuild"),
+    };
+    match controller.set_config(&config) {
+        Ok(()) => info!("wifi: setup network {network_name} is up"),
+        Err(error) => warn!("wifi: couldn't start the radio: {error:?}"),
     }
 
     loop {
@@ -57,6 +84,7 @@ pub async fn wifi_task(mut controller: WifiController<'static>, seed: u32) -> ! 
                     }
                 };
                 link.handle(now(), event);
+                ONLINE.store(event == WifiEvent::Joined, Ordering::Relaxed);
                 info!("wifi: {:?}", link.status());
             }
             WifiNext::StartPortal => {
@@ -92,11 +120,13 @@ pub async fn wifi_task(mut controller: WifiController<'static>, seed: u32) -> ! 
 
 fn on_drop(link: &mut WifiLink) {
     warn!("wifi: connection dropped");
+    ONLINE.store(false, Ordering::Relaxed);
     link.handle(now(), WifiEvent::Failed);
 }
 
-/// Runs the network stack: DHCP, ARP and the sockets.
-#[embassy_executor::task]
+/// Runs a network stack: DHCP, ARP and the sockets. One for the home
+/// network and one for the setup network.
+#[embassy_executor::task(pool_size = 2)]
 pub async fn net_task(mut runner: Runner<'static, Interface<'static>>) -> ! {
     runner.run().await
 }

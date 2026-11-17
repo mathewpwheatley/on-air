@@ -16,13 +16,17 @@ use log::info;
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use esp_hal::rng::Rng;
-use on_air_firmware::{board, display_task, https_check, input_task, sntp_task, wifi_task};
+use on_air_firmware::{
+    board, display_task, https_check, input_task, setup_network, sntp_task, wifi_task,
+};
 use static_cell::StaticCell;
 use tinyrlibc as _;
 
 use esp_backtrace as _;
 
 extern crate alloc;
+
+use alloc::string::String;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -75,8 +79,29 @@ async fn main(spawner: Spawner) -> ! {
         net_seed,
     );
     spawner.spawn(wifi_task::net_task(net_runner).expect("net task already running"));
+
+    // The setup network, on its own stack with a fixed address.
+    static SETUP_NETWORK_NAME: StaticCell<String> = StaticCell::new();
+    let setup_network_name: &'static str = SETUP_NETWORK_NAME.init(
+        on_air_core::setup::network_name(interfaces.access_point.mac_address()),
+    );
+    static SETUP_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    let (setup_stack, setup_runner) = embassy_net::new(
+        interfaces.access_point,
+        setup_network::stack_config(),
+        SETUP_RESOURCES.init(StackResources::new()),
+        net_seed.rotate_left(17),
+    );
+    spawner.spawn(wifi_task::net_task(setup_runner).expect("setup net task already running"));
+    spawner.spawn(setup_network::dhcp_task(setup_stack).expect("DHCP task already running"));
     spawner.spawn(
-        wifi_task::wifi_task(wifi_controller, rng.random()).expect("wifi task already running"),
+        setup_network::page_task(setup_stack, setup_network_name)
+            .expect("setup page task already running"),
+    );
+
+    spawner.spawn(
+        wifi_task::wifi_task(wifi_controller, rng.random(), setup_network_name)
+            .expect("wifi task already running"),
     );
     spawner.spawn(sntp_task::sntp_task(stack, rng.random()).expect("sntp task already running"));
     spawner.spawn(https_check::https_check_task(stack).expect("https check already running"));

@@ -156,8 +156,8 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P2 UI + simulator | ✅ Done |
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
-| P5 Network + TLS | In progress. WiFi, PSRAM, SNTP and TLS to all five hosts work; AP+STA to do. |
-| P6 Spotify on device | Not started. The logic is done in core. |
+| P5 Network + TLS | ✅ Done. WiFi, PSRAM, SNTP, TLS to all five hosts, and AP+STA. |
+| P6 Spotify on device | Next. The logic is done in core. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
 | P9 Polish | Host side done. The device side is not started. |
@@ -234,7 +234,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 **Until the buttons and knob arrive (2026-11-16):** the board's own UP (GPIO6) and DOWN (GPIO7) buttons stand in for the knob. `core::input::KnobButtons` turns each press into one step of a pretend knob, repeating while held, and feeds it through `Knob`, so the curve and floor match. The firmware's `knob_buttons_task` sends the result on the brightness signal, and `main` logs it until the panel is driven. The four playback buttons wait for the parts.
 
-### P5 — Network + TLS spike (M2)
+### P5 — Network + TLS spike (M2) ✅
 
 - [x] Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time). `wifi_task` runs `core::wifi::WifiLink`, with `ON_AIR_WIFI_SSID` and `ON_AIR_WIFI_PASSWORD` from `.env`, and gets an address over DHCP.
 - [x] Move the heap to PSRAM. The board has 2 MB (quad SPI), added to the heap at boot.
@@ -242,7 +242,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - [x] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on. Decided: `mbedtls-rs`, which is what esp-mbedtls now publishes. All five hosts pass; see the notes.
 - [x] Retest `api.open-meteo.com`. On 2026-11-16 its TLS handshake never completed, from the Mac (`curl`, `openssl`) as well as the board, so it was the server or the network path. Retested the same evening: 200 OK in 1.6 s, so all five hosts pass.
 - [x] Find why `geocoding-api.open-meteo.com` takes about 21.7 s on the board (0.6 s from the Mac), on every run. The per-stage timings showed it: the request is done in 2 s (DNS 25 ms, connect 235 ms, handshake 1.5 s, response 0.25 s), then the server never answers our TLS close, so the close waited out the 20 s socket timeout. The close now gets a 1 s grace period. The real HTTP layer in P6 must do the same.
-- [ ] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
+- [x] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi. The board joins the home network and runs `OnAir-XXXX` (open, `192.168.4.1/24`, DHCP from `edge-dhcp`) at the same time; a Pixel 8 joined and got `192.168.4.50`, and the home connection stayed up. The test page at `http://192.168.4.1` didn't load on the Pixel because Android sends traffic over mobile data when a WiFi network has no internet; that's Q-4, for the captive portal in P7.
 
 **Notes so far (2026-11-16):**
 - **Memory at boot**, with WiFi up and the test patterns running: the 72 KB internal region is 96% used (2.5 KB free), the extra 96 KB region has 72 KB free, and PSRAM's 2 MB is untouched. The allocator fills internal RAM first, so TLS buffers, JSON and covers should go to PSRAM explicitly (an allocator with `MemoryCapability::External`), keeping internal RAM for WiFi and DMA.
@@ -251,6 +251,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
   - **Randomness** comes from esp-hal's `Rng`, a true random source while the radio is on, rather than `TrngSource`, which would hold ADC1 that the knob needs.
   - **Results**, software crypto: `accounts.spotify.com` 200 in 0.8–1.2 s, `api.spotify.com` 401 (expected, no sign-in) in 0.9–1.2 s, `i.scdn.co` 200 in 1.4–1.9 s, `api.open-meteo.com` 200 in 1.6 s (after an outage on its side), `geocoding-api.open-meteo.com` 200 in about 2 s once the close stopped waiting (see the task above). Handshakes are 0.4–1.5 s of each request.
   - **Memory:** each session's memory is freed when it closes, so the heap is back to its starting point after the checks, and PSRAM is still untouched. The peak during a handshake hasn't been measured.
+  - **One flaky run:** with a phone on the setup network, `geocoding-api.open-meteo.com` failed its handshake once (4 of 5). Watch for it in P8; if it repeats, look at handshake timeouts while the access point is busy.
   - **Code size:** mbedtls adds about 470 KB; the firmware is about 1 MB of the 8 MB flash.
   - **Later:** the chip's SHA, RSA and AES hardware can speed up handshakes (`mbedtls_rs::sys::hook::backend::esp::EspAccel`).
 - **Current cap seen working:** full white at brightness 150 is capped to 137, matching the 2150 mA budget under the 4000 mA full-white estimate.

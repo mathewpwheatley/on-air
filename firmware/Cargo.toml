@@ -54,6 +54,10 @@ sntpc-net-embassy = { version = "0.8", features = ["log"] }
 mbedtls-rs = { version = "0.2", features = ["esp32s3", "log", "embassy-time", "hook-wall-clock", "use-gcc"] }
 rand_core = "0.10.1"
 heapless = "0.9"
+# DHCP for phones on the setup network. 0.7 and 0.8.1 pair with embassy-net 0.8.
+edge-dhcp = { version = "0.7", features = ["log"] }
+edge-nal = "0.6"
+edge-nal-embassy = { version = "0.8.1", default-features = false, features = ["udp", "proto-ipv4", "medium-ethernet"] }
 # C library functions that mbedtls needs.
 tinyrlibc = { version = "0.5", default-features = false, features = ["memchr"] }
 # trail-blank-2 blanks the panel briefly after each row change, against ghosting.
