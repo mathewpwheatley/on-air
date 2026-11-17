@@ -61,8 +61,12 @@ heapless = "0.9"
 esp-storage = { version = "0.9", features = ["esp32s3"] }
 sequential-storage = "8.0"
 embassy-embedded-hal = "0.6"
+# The WiFi driver's own bindings, the version esp-radio uses, to change the
+# home network without restarting the setup network (see wifi_task).
+esp-wifi-sys-esp32s3 = "=0.2.0"
 edge-dhcp = { version = "0.7", features = ["log"] }
 edge-nal = "0.6"
+edge-captive = { version = "0.7", features = ["log"] }
 edge-nal-embassy = { version = "0.8.1", default-features = false, features = ["udp", "proto-ipv4", "medium-ethernet"] }
 # C library functions that mbedtls needs.
 tinyrlibc = { version = "0.5", default-features = false, features = ["memchr"] }

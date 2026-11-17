@@ -43,3 +43,7 @@ flash:
 # Open the serial monitor without flashing
 monitor:
     espflash monitor --chip esp32s3
+
+# Erase the saved settings (the flash `settings` partition), like a factory reset
+erase-settings:
+    espflash erase-region --chip esp32s3 0x400000 0x10000

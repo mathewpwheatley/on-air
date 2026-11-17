@@ -158,7 +158,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
 | P5 Network + TLS | ✅ Done. WiFi, PSRAM, SNTP, TLS to all five hosts, and AP+STA. |
 | P6 Spotify on device | Software done, apart from seeing a token rotation saved. Playback buttons wait on the parts. |
-| P7 Setup portal | Host side done. The device side is not started. |
+| P7 Setup portal | On the device: the portal opens on a phone, scans and joins WiFi. The Spotify sign-in and a factory-fresh run-through to test. |
 | P8 Idle screens | Weather and tides work on the panel. Saving the idle screen and the preview wait on the Mode button. |
 | P9 Polish | Host side done. The device side is not started. |
 
@@ -285,11 +285,17 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 ### P7 — Setup portal (M4)
 
-- [ ] Soft AP `OnAir-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`).
-- [ ] Serve `core::portal::PAGE` and the routes listed in `core::portal` with `picoserve`. The page, form checking, sign-in session and JSON replies are already built and tested; the device supplies the WiFi scan, joining, geocoding and the token exchange.
-- [ ] Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA.
-- [ ] Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6).
-- [ ] **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction.
+- [x] Soft AP `OnAir-XXXX`, captive-portal DNS with `edge-captive`, and captive-portal detection URLs that redirect to the form (`/generate_204`, `/hotspot-detect.html`). DHCP also names the board as DNS server and sends the captive-portal URL (RFC 8910); a Pixel 8 opens "Sign in to network" by itself.
+- [x] Serve `core::portal::PAGE` and the routes listed in `core::portal`. A small server on `core::http::decode_request` and `encode_response` (three tasks, since phones open several connections) instead of `picoserve`; the WiFi scan and joining are in `wifi_task`, the fetches go through `https::HttpsClient`.
+- [ ] Paste-back sign-in using `core::portal::SignIn`, then the token exchange over AP+STA. Written; on Android the portal window closes when Spotify opens in the browser, so `Status` now reports a waiting sign-in and the page reopens on the paste box. Test end to end.
+- [ ] Settings saved, then a reboot. Long-press handling for portal reopen and factory reset (P-6). Written: the portal saves its settings on each change and restarts after Finish; holding UP and DOWN for 5 s reopens it until the Mode button is fitted. Factory reset waits on the buttons (`just erase-settings` meanwhile).
+- [x] **Q-4:** test on an iPhone and an Android phone. Decide between mobile-data fallback, bridging, or a "open in full browser" instruction. Decided (Android tested): Spotify sign-in opens in the phone's own browser over mobile data (an `intent://` link on Android), with the paste-back flow; a hosted HTTPS relay page that would remove the paste was considered and set aside for now. iPhone still to test.
+
+**Notes so far (2026-11-16):**
+- **Which settings run:** `firmware/src/config.rs`. Once the portal has saved a WiFi network its settings are used as they are; until then `.env` fills the gaps, for development.
+- **The setup network only runs while the portal is open** (no network saved, the saved one can't be joined within 30 s of boot, or UP and DOWN held), per N-5.
+- **Single-radio limits:** joining the home network moves the setup network to its channel, which drops phones, so the setup network starts on the home network's channel (scanned first). esp-radio's `set_config` restarts the access point, so joining from the portal changes only the station's settings through the driver (`esp-wifi-sys-esp32s3`, pinned to esp-radio's version). Scanning takes the radio off-channel for seconds, so the portal scans only before the setup network comes up, or when it has no list.
+- **Page:** spinners on buttons that wait on the board, stepping dots while networks load, and a shorter Spotify step (instructions folded away once a client ID is saved).
 
 **Done when:** a factory-reset device goes from first boot to showing art using only a phone.
 

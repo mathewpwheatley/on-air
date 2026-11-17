@@ -224,6 +224,10 @@ pub struct KnobButtons {
     next_step_at: [Option<u64>; 2],
     position: u16,
     knob: Knob,
+    /// When both buttons went down together, and whether that hold has
+    /// already opened the portal.
+    both_since: Option<u64>,
+    portal_fired: bool,
 }
 
 impl KnobButtons {
@@ -234,6 +238,8 @@ impl KnobButtons {
             next_step_at: [None; 2],
             position: position.min(ADC_MAX),
             knob: Knob::new(floor),
+            both_since: None,
+            portal_fired: false,
         }
     }
 
@@ -252,8 +258,15 @@ impl KnobButtons {
                 None => {}
             }
         }
-        // Both held: neither moves the knob.
+        // Both held: neither moves the knob, and holding them for
+        // [`PORTAL_HOLD_MS`] stands in for the Mode-button hold.
         let both = self.next_step_at.iter().all(Option::is_some);
+        if both {
+            self.both_since.get_or_insert(now_ms);
+        } else {
+            self.both_since = None;
+            self.portal_fired = false;
+        }
         for i in 0..2 {
             let Some(at) = self.next_step_at[i] else {
                 continue;
@@ -274,6 +287,22 @@ impl KnobButtons {
             self.next_step_at[i] = Some(now_ms + wait);
         }
         self.knob.update(self.position)
+    }
+}
+
+impl KnobButtons {
+    /// True once per hold, when both buttons have been held together for
+    /// [`PORTAL_HOLD_MS`]: the stand-in for holding Mode to open the setup
+    /// portal. Call after [`KnobButtons::update`].
+    pub fn take_portal_hold(&mut self, now_ms: u64) -> bool {
+        let held = self
+            .both_since
+            .is_some_and(|since| now_ms.saturating_sub(since) >= PORTAL_HOLD_MS);
+        if held && !self.portal_fired {
+            self.portal_fired = true;
+            return true;
+        }
+        false
     }
 }
 
@@ -483,6 +512,42 @@ mod tests {
         let mut last = None;
         run_knob(&mut k, BOTH, 0, 2_000, &mut last);
         assert_eq!(last, Some(curve(2048, DEFAULT_FLOOR)));
+    }
+
+    #[test]
+    fn knob_buttons_held_together_open_the_portal_once() {
+        let mut k = KnobButtons::new(DEFAULT_FLOOR, 2048);
+        let mut opened = 0;
+        let mut t = 0;
+        while t <= PORTAL_HOLD_MS * 3 {
+            k.update(BOTH, t);
+            opened += k.take_portal_hold(t) as u32;
+            t += POLL_INTERVAL_MS;
+        }
+        assert_eq!(opened, 1);
+        // Letting go and holding again opens it again.
+        while t <= PORTAL_HOLD_MS * 3 + 200 {
+            k.update(NONE, t);
+            t += POLL_INTERVAL_MS;
+        }
+        let start = t;
+        while t <= start + PORTAL_HOLD_MS + 100 {
+            k.update(BOTH, t);
+            opened += k.take_portal_hold(t) as u32;
+            t += POLL_INTERVAL_MS;
+        }
+        assert_eq!(opened, 2);
+    }
+
+    #[test]
+    fn knob_buttons_short_hold_together_does_nothing() {
+        let mut k = KnobButtons::new(DEFAULT_FLOOR, 2048);
+        let mut t = 0;
+        while t < PORTAL_HOLD_MS - 100 {
+            k.update(BOTH, t);
+            assert!(!k.take_portal_hold(t));
+            t += POLL_INTERVAL_MS;
+        }
     }
 
     #[test]

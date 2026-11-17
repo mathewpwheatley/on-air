@@ -372,7 +372,7 @@ The software side of each milestone is broken down in [implementation-plan.md](i
 | Q-1 | Can the MatrixPortal's USB-C input and screw terminals carry about 2.5 A to the panel continuously? Adafruit doesn't publish a rating. | Check the schematic in Adafruit's PCB repo, and check that the board stays cool at the cap during the M0 bench test. Lower the cap if needed. |
 | Q-2 | Pinout and pull-ups on the button board. | Check the board before wiring. |
 | Q-3 | Measured maximum current draw of the panel. | Bench-measure in M0 and tune the firmware cap (default 2.5 A). |
-| Q-4 | During sign-in the phone is on the setup network, which has no internet, so it may not reach Spotify's login page. iOS and Android captive-portal windows may also make copying the callback URL hard. | Test in M4. Options: let the phone fall back to mobile data, have the device bridge traffic while it is on home WiFi, or tell the owner to open the portal in the full browser. |
+| Q-4 | During sign-in the phone is on the setup network, which has no internet, so it may not reach Spotify's login page. iOS and Android captive-portal windows may also make copying the callback URL hard. | Decided in M4 (2026-11-16, tested on Android): the sign-in opens in the phone's own browser, which uses mobile data, and the owner pastes the callback address back. Android closes the portal window when the browser opens, so the portal remembers the waiting sign-in and reopens on the paste box. A hosted HTTPS relay page could remove the paste later. iPhone still to test. |
 
 ## 10. Spotify app setup (owner, one time)
 

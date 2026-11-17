@@ -636,10 +636,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f7ff15f82df7d5086fb15dfc1c1e96598a6ded9829840a9bcfa1fa3ccd8d01d"
+dependencies = [
+ "domain-macros",
+ "heapless 0.8.0",
+ "octseq",
+ "time",
+]
+
+[[package]]
+name = "domain-macros"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d1a6796ad411f6812d691955066ad27450196bfb181bb91b66a643cc3e8f5b7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
+name = "edge-captive"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d29fd6f6b5d22e4d44c61b0ee56bf6a868868e71605a42a8ee03c3b4b7920c76"
+dependencies = [
+ "domain",
+ "edge-nal",
+ "log",
+]
 
 [[package]]
 name = "edge-dhcp"
@@ -2277,6 +2311,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "octseq"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "126c3ca37c9c44cec575247f43a3e4374d8927684f129d2beeb0d2cef262fe12"
+dependencies = [
+ "heapless 0.8.0",
+]
+
+[[package]]
 name = "on-air-core"
 version = "0.1.0"
 dependencies = [
@@ -2300,6 +2343,7 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "dotenvy",
+ "edge-captive",
  "edge-dhcp",
  "edge-nal",
  "edge-nal-embassy",
@@ -2321,6 +2365,7 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "esp-storage",
+ "esp-wifi-sys-esp32s3",
  "heapless 0.9.3",
  "log",
  "mbedtls-rs",

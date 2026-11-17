@@ -216,6 +216,99 @@ fn dechunk(mut received: &[u8]) -> Option<Option<Vec<u8>>> {
     }
 }
 
+/// A request received by a host's web server, from [`decode_request`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingRequest {
+    /// `None` for methods the setup portal doesn't use.
+    pub method: Option<Method>,
+    /// The path with any query string.
+    pub target: String,
+    pub body: Vec<u8>,
+}
+
+/// How far [`decode_request`] got with the bytes received so far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodedRequest {
+    /// Read more, then try again.
+    Incomplete,
+    Complete(IncomingRequest),
+    /// Not a valid HTTP request.
+    Invalid,
+}
+
+/// Decode a request from everything received so far, for a web server.
+/// The body is whatever `Content-Length` says; chunked requests aren't
+/// supported, since browsers send forms with a length.
+pub fn decode_request(received: &[u8]) -> DecodedRequest {
+    let mut headers = [httparse::EMPTY_HEADER; 32];
+    let mut parsed = httparse::Request::new(&mut headers);
+    let head_len = match parsed.parse(received) {
+        Ok(httparse::Status::Complete(len)) => len,
+        Ok(httparse::Status::Partial) => return DecodedRequest::Incomplete,
+        Err(_) => return DecodedRequest::Invalid,
+    };
+    let (Some(method), Some(target)) = (parsed.method, parsed.path) else {
+        return DecodedRequest::Invalid;
+    };
+    let length = parsed
+        .headers
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case("content-length"))
+        .map(|h| {
+            core::str::from_utf8(h.value)
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+        });
+    let length = match length {
+        Some(Some(length)) => length,
+        Some(None) => return DecodedRequest::Invalid,
+        None => 0,
+    };
+    let body = &received[head_len..];
+    if body.len() < length {
+        return DecodedRequest::Incomplete;
+    }
+    DecodedRequest::Complete(IncomingRequest {
+        method: match method {
+            "GET" => Some(Method::Get),
+            "POST" => Some(Method::Post),
+            "PUT" => Some(Method::Put),
+            _ => None,
+        },
+        target: target.into(),
+        body: body[..length].to_vec(),
+    })
+}
+
+/// The bytes of a web server's reply, closing the connection afterwards.
+/// `headers` are extra ones, such as `Location`.
+pub fn encode_response(
+    status: u16,
+    content_type: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> Vec<u8> {
+    let reason = match status {
+        200 => "OK",
+        302 => "Found",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "",
+    };
+    let mut head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+         Cache-Control: no-store\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("\r\n");
+    let mut out = head.into_bytes();
+    out.extend_from_slice(body);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +409,60 @@ mod tests {
         assert_eq!(
             decode(b"HTTP/1.1 204 No Content\r\n\r\n", false),
             Decoded::Complete(Response::new(204, Vec::new()))
+        );
+    }
+
+    #[rstest]
+    #[case::get_with_query(
+        "GET /api/places?q=Portland HTTP/1.1\r\nHost: 192.168.4.1\r\n\r\n",
+        Some((Some(Method::Get), "/api/places?q=Portland", "")),
+    )]
+    #[case::form_post(
+        "POST /api/wifi HTTP/1.1\r\nContent-Length: 9\r\n\r\nssid=Home",
+        Some((Some(Method::Post), "/api/wifi", "ssid=Home")),
+    )]
+    #[case::other_method("DELETE / HTTP/1.1\r\n\r\n", Some((None, "/", "")))]
+    #[case::head_partial("GET / HTTP/1.1\r\nHost: 192.", None)]
+    #[case::body_partial("POST /api/wifi HTTP/1.1\r\nContent-Length: 9\r\n\r\nssid", None)]
+    fn decodes_requests(
+        #[case] received: &str,
+        #[case] expected: Option<(Option<Method>, &str, &str)>,
+    ) {
+        let expected = match expected {
+            Some((method, target, body)) => DecodedRequest::Complete(IncomingRequest {
+                method,
+                target: target.into(),
+                body: body.as_bytes().to_vec(),
+            }),
+            None => DecodedRequest::Incomplete,
+        };
+        assert_eq!(decode_request(received.as_bytes()), expected);
+    }
+
+    #[test]
+    fn rejects_garbage_and_bad_lengths() {
+        assert_eq!(
+            decode_request(b"\x16\x03\x01 tls hello\r\n\r\n"),
+            DecodedRequest::Invalid
+        );
+        assert_eq!(
+            decode_request(b"POST / HTTP/1.1\r\nContent-Length: lots\r\n\r\n"),
+            DecodedRequest::Invalid
+        );
+    }
+
+    #[test]
+    fn encodes_a_redirect() {
+        let reply = text(encode_response(
+            302,
+            "text/plain",
+            &[("Location", "http://192.168.4.1/")],
+            b"",
+        ));
+        assert_eq!(
+            reply,
+            "HTTP/1.1 302 Found\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\
+             Cache-Control: no-store\r\nConnection: close\r\nLocation: http://192.168.4.1/\r\n\r\n"
         );
     }
 

@@ -19,7 +19,7 @@ use log::info;
 use on_air_core::app::{App, Event, NetStatus, Playback};
 use on_air_core::frame::FramePipeline;
 use on_air_core::image::{DEFAULT_POWER, FRAME_LEN};
-use on_air_core::settings::{DEFAULT_IDLE_AFTER_MIN, IdleMode};
+use on_air_core::settings::IdleMode;
 use on_air_core::spotify::NowPlaying;
 use on_air_core::tide::{self, TideSupport, TideTurn};
 use on_air_core::timezone::{self, TimeZone};
@@ -27,6 +27,7 @@ use on_air_core::weather::{Reading, STALE_AFTER_S};
 use on_air_ui::{Framebuffer, Scene, TideTimes, Track, WeatherInfo};
 use static_cell::ConstStaticCell;
 
+use crate::config::Effective;
 use crate::input_task::BRIGHTNESS;
 use crate::spotify_task::{self, SpotifyUpdate};
 use crate::weather_task::{self, WeatherUpdate};
@@ -51,11 +52,6 @@ static BACK: ConstStaticCell<PanelFrame> = ConstStaticCell::new(PanelFrame::new(
 const FRAME_MS: u64 = 30;
 /// Log the refresh rate this often.
 const STATS_MS: u64 = 60_000;
-
-/// IANA timezone for the clock, from `.env` (or the build computer's) at
-/// build time, until the setup portal saves the city's.
-const TIMEZONE: Option<&str> = option_env!("ON_AIR_TIMEZONE");
-const CLOCK_24H: Option<&str> = option_env!("ON_AIR_CLOCK_24H");
 
 /// Start refreshing the panel. Returns the driver and the spare
 /// framebuffer for [`display_task`].
@@ -82,23 +78,26 @@ pub async fn display_task(
     hub75: Hub75<Async, PanelFrame>,
     mut back: &'static mut PanelFrame,
     setup_network: &'static str,
-    idle_mode: IdleMode,
+    settings: &'static Effective,
 ) -> ! {
+    let settings = &settings.settings;
+    let idle_mode = settings.idle_mode;
     let mut drawn = Box::new(Framebuffer::new());
     let mut shown = vec![0u8; FRAME_LEN];
     let mut pipeline = FramePipeline::for_panel(DEFAULT_POWER);
     let mut brightness = BRIGHTNESS.wait().await;
-    let zone = TIMEZONE.and_then(timezone::find).unwrap_or(TimeZone::UTC);
-    let clock_24h = matches!(CLOCK_24H, Some("true" | "1"));
-    info!("display: timezone {}", TIMEZONE.unwrap_or("UTC"));
+    let zone = timezone::find(&settings.timezone).unwrap_or(TimeZone::UTC);
+    let clock_24h = settings.clock_24h;
+    info!("display: timezone {}", settings.timezone);
 
-    let units = weather_task::units();
+    let units = settings.units;
     let mut app = App::new(idle_mode);
+    app.set_idle_after_ms(settings.idle_after_ms());
+    app.set_tides_available(settings.has_tides());
     info!("display: idle screen {idle_mode:?}");
     let mut fetching_for: Option<IdleMode> = None;
     let mut weather: Option<(Reading, Instant)> = None;
     let mut tide_turns: Vec<TideTurn> = Vec::new();
-    app.set_idle_after_ms(DEFAULT_IDLE_AFTER_MIN as u64 * 60_000);
     let mut art: Option<Vec<u8>> = None;
     let mut track: Option<NowPlaying> = None;
     let mut spotify_reachable: Option<bool> = None;

@@ -16,7 +16,8 @@ use log::info;
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use esp_hal::rng::Rng;
-use on_air_core::settings::IdleMode;
+use on_air_core::settings::Settings;
+use on_air_firmware::config::{self, Effective};
 use on_air_firmware::{
     board, display_task, https, input_task, setup_network, sntp_task, spotify_task, storage,
     weather_task, wifi_task,
@@ -56,8 +57,10 @@ async fn main(spawner: Spawner) -> ! {
         esp_alloc::psram_allocator!(&psram);
     }
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
-    // More internal RAM, from the otherwise-unused stack space.
-    esp_alloc::heap_allocator!(size: 96 * 1024);
+    // A little more internal RAM for WiFi, from the stack space. Kept small:
+    // the stack has to hold mbedtls's handshakes, and with PSRAM first this
+    // region showed no use.
+    esp_alloc::heap_allocator!(size: 32 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let software_interrupts = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
@@ -71,6 +74,24 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("PSRAM: {} KB", psram_size / 1024);
 
+    // The settings to run with: saved by the setup portal, or in
+    // development filled in from `.env`.
+    let store = storage::SettingsStore::open(peripherals.FLASH).await;
+    let saved = match store {
+        Some(store) => store.get().await,
+        None => Settings::default(),
+    };
+    static SETTINGS: StaticCell<Effective> = StaticCell::new();
+    let settings: &'static Effective = SETTINGS.init(config::effective(saved));
+    info!(
+        "settings: {}",
+        if settings.from_portal {
+            "from the setup portal"
+        } else {
+            "from .env (not set up yet)"
+        }
+    );
+
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");
     let rng = Rng::new();
@@ -83,13 +104,15 @@ async fn main(spawner: Spawner) -> ! {
         net_seed,
     );
     spawner.spawn(wifi_task::net_task(net_runner).expect("net task already running"));
+    let https_client = https::HttpsClient::start(stack);
 
-    // The setup network, on its own stack with a fixed address.
+    // The setup network, on its own stack with a fixed address. Its
+    // services only see traffic while the portal has it up.
     static SETUP_NETWORK_NAME: StaticCell<String> = StaticCell::new();
     let setup_network_name: &'static str = SETUP_NETWORK_NAME.init(
         on_air_core::setup::network_name(interfaces.access_point.mac_address()),
     );
-    static SETUP_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    static SETUP_RESOURCES: StaticCell<StackResources<6>> = StaticCell::new();
     let (setup_stack, setup_runner) = embassy_net::new(
         interfaces.access_point,
         setup_network::stack_config(),
@@ -98,35 +121,36 @@ async fn main(spawner: Spawner) -> ! {
     );
     spawner.spawn(wifi_task::net_task(setup_runner).expect("setup net task already running"));
     spawner.spawn(setup_network::dhcp_task(setup_stack).expect("DHCP task already running"));
-    spawner.spawn(
-        setup_network::page_task(setup_stack, setup_network_name)
-            .expect("setup page task already running"),
+    spawner.spawn(setup_network::dns_task(setup_stack).expect("DNS task already running"));
+    let portal = setup_network::PortalShared::new(
+        settings.settings.clone(),
+        setup_network_name,
+        store,
+        https_client,
     );
+    for _ in 0..3 {
+        spawner.spawn(setup_network::web_task(setup_stack, portal).expect("too many web tasks"));
+    }
 
     spawner.spawn(
-        wifi_task::wifi_task(wifi_controller, rng.random(), setup_network_name)
-            .expect("wifi task already running"),
+        wifi_task::wifi_task(
+            wifi_controller,
+            rng.random(),
+            setup_network_name,
+            settings.settings.wifi_ssid.clone(),
+            settings.settings.wifi_pass.clone(),
+        )
+        .expect("wifi task already running"),
     );
     spawner.spawn(sntp_task::sntp_task(stack, rng.random()).expect("sntp task already running"));
-    let store = storage::SettingsStore::open(peripherals.FLASH).await;
-    let https_client = https::HttpsClient::start(stack);
     spawner.spawn(
-        spotify_task::spotify_task(https_client, store, rng.random())
+        spotify_task::spotify_task(https_client, store, settings, rng.random())
             .expect("spotify task already running"),
     );
     spawner.spawn(
-        weather_task::weather_task(https_client, store, rng.random())
+        weather_task::weather_task(https_client, store, settings, rng.random())
             .expect("weather task already running"),
     );
-    // The idle screen from `.env` if set (there's no Mode button yet),
-    // else the saved one.
-    let idle_mode = match option_env!("ON_AIR_IDLE_SCREEN").and_then(IdleMode::from_name) {
-        Some(mode) => mode,
-        None => match store {
-            Some(store) => store.get().await.idle_mode,
-            None => IdleMode::default(),
-        },
-    };
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
     spawner.spawn(
@@ -139,7 +163,7 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.DMA_CH0,
     );
     spawner.spawn(
-        display_task::display_task(hub75, spare_frame, setup_network_name, idle_mode)
+        display_task::display_task(hub75, spare_frame, setup_network_name, settings)
             .expect("display task already running"),
     );
 

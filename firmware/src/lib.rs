@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod board;
+pub mod config;
 pub mod display_task;
 pub mod https;
 pub mod input_task;

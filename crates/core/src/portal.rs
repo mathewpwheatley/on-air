@@ -314,6 +314,11 @@ pub struct Status {
     pub idle_minutes: u8,
     /// Whether the city has tide data: `yes`, `no` or `unknown`.
     pub tides: &'static str,
+    /// The Spotify sign-in link while a sign-in waits for its pasted
+    /// address, so a reloaded page can go straight back to the paste box.
+    /// Phones may close the portal window when the browser opens. The link
+    /// holds nothing secret: the PKCE verifier stays on the device.
+    pub spotify_pending_url: Option<String>,
 }
 
 impl Status {
@@ -336,7 +341,14 @@ impl Status {
             clock: if settings.clock_24h { "24" } else { "12" },
             idle_minutes: settings.idle_after_min,
             tides: tides_name(settings.tides),
+            spotify_pending_url: None,
         }
+    }
+
+    /// Add the link of a sign-in that's waiting for its pasted address.
+    pub fn with_pending_sign_in(mut self, sign_in: Option<&SignIn>) -> Self {
+        self.spotify_pending_url = sign_in.map(SignIn::authorize_url);
+        self
     }
 
     pub fn to_json(&self) -> String {
@@ -602,7 +614,9 @@ impl Portal {
             (Method::Get, "/") => Handled::Reply(Reply::Page),
             (Method::Get, p) if is_captive_probe(p) => Handled::Reply(Reply::Redirect),
             (Method::Get, "/api/status") => {
-                json(Status::new(&self.settings, &self.network_name, self.wifi).to_json())
+                let status = Status::new(&self.settings, &self.network_name, self.wifi)
+                    .with_pending_sign_in(self.sign_in.as_ref());
+                json(status.to_json())
             }
             (Method::Get, "/api/networks") => json(networks_json(&self.networks)),
             (Method::Get, "/api/places") => {
@@ -841,6 +855,23 @@ mod tests {
             .nth(1)
             .unwrap()
             .trim_end_matches("\"}");
+
+        // A reloaded page finds the sign-in waiting, without the verifier.
+        let Reply::Json(waiting) = request(
+            &mut portal,
+            Method::Get,
+            "/api/status",
+            "",
+            None,
+            &mut events,
+        ) else {
+            panic!()
+        };
+        let verifier = portal.sign_in.as_ref().unwrap().pkce.verifier.clone();
+        assert!(
+            waiting.contains(r#""spotify_pending_url":"https://accounts.spotify.com/authorize?"#)
+        );
+        assert!(!waiting.contains(&verifier));
         let callback = alloc::format!(
             "callback_url=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback%3Fcode%3Dabc%26state%3D{state}"
         );
@@ -866,6 +897,21 @@ mod tests {
         assert_eq!(
             portal.settings().spotify_refresh_token.as_deref(),
             Some("AQC-new-refresh-token")
+        );
+        // Signed in, so no sign-in is waiting any more.
+        let Reply::Json(signed_in) = request(
+            &mut portal,
+            Method::Get,
+            "/api/status",
+            "",
+            None,
+            &mut events,
+        ) else {
+            panic!()
+        };
+        assert!(
+            signed_in.contains(r#""spotify_pending_url":null"#),
+            "{signed_in}"
         );
 
         // Finish is refused until there's a city.

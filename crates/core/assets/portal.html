@@ -58,6 +58,16 @@ button.secondary {
   background: var(--line); border: 0; border-radius: 8px; cursor: pointer;
 }
 button:disabled { opacity: .45; cursor: default; }
+/* A spinner in place of the label while the button's request runs. */
+button.busy { position: relative; color: transparent; opacity: 1; }
+button.busy::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border: 2px solid; border-color: #000 #000 #000 transparent; border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+button.secondary.busy::after { border-color: var(--text) var(--text) var(--text) transparent; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .choices { display: flex; gap: 12px; flex-wrap: wrap; }
 .choices label { white-space: nowrap; }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -73,6 +83,10 @@ input[type=range] { width: 100%; margin: 8px 0 0; }
 .status.ok { color: var(--accent); }
 .status.bad { color: var(--error); }
 .hint { font-size: .9rem; color: var(--muted); }
+details.hint { margin: 8px 0; }
+details.hint summary { cursor: pointer; color: var(--text); }
+details.hint textarea { margin-top: 8px; min-height: 0; }
+details.hint button { margin-top: 8px; padding: 10px 16px; }
 .hint ol { padding-left: 20px; margin: 6px 0; }
 code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .85rem; }
 #places label { padding: 8px 0; border-bottom: 1px solid var(--line); margin: 0; }
@@ -95,7 +109,7 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
     <div class="body">
       <form id="wifi-form">
         <label for="ssid-list">Network</label>
-        <select id="ssid-list"><option value="">Looking for networks…</option></select>
+        <select id="ssid-list"><option value="">Looking for networks.</option></select>
         <input type="text" id="ssid-other" class="hidden" placeholder="Network name" autocapitalize="off" autocomplete="off">
         <div class="error" data-error="ssid"></div>
         <label for="password">Password</label>
@@ -115,31 +129,40 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: .
       <span class="edit">Edit</span>
     </button>
     <div class="body">
-      <div class="hint">
-        You need a free Spotify developer app:
+      <details class="hint" id="spotify-help">
+        <summary>First time? Create a Spotify app</summary>
         <ol>
-          <li>Open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and create an app.</li>
+          <li>Open <a class="external" href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and create an app.</li>
           <li>Add this redirect URI: <code>http://127.0.0.1:8888/callback</code></li>
           <li>Tick <b>Web API</b>, save, and copy the app's <b>Client ID</b>.</li>
         </ol>
-      </div>
+      </details>
       <form id="spotify-start">
         <label for="client-id">Client ID</label>
         <input type="text" id="client-id" autocapitalize="off" autocomplete="off" spellcheck="false">
         <div class="error" data-error="client_id"></div>
-        <button class="action" type="submit" id="connect-spotify">Connect Spotify</button>
+        <button class="action" type="submit" id="connect-spotify">Sign in with Spotify</button>
         <div class="status" id="spotify-status"></div>
       </form>
       <form id="spotify-finish" class="hidden">
-        <a id="authorize-link" class="action" target="_blank" rel="noopener">Open Spotify sign-in</a>
         <p class="hint">
-          After you tap <b>Agree</b>, Spotify opens a page that won't load. That's expected.
-          Copy that page's whole address and paste it here.
+          Approve in your browser. It then shows a page that can't load: copy
+          that page's address and paste it here.
         </p>
-        <label for="callback-url">Address of the page that didn't load</label>
+        <p class="hint">
+          If your phone closes this window, come back by turning off mobile
+          data and opening <b>http://192.168.4.1</b> in your browser, or by
+          rejoining <b class="network-name"></b> in WiFi settings.
+        </p>
         <textarea id="callback-url" autocapitalize="off" spellcheck="false" placeholder="http://127.0.0.1:8888/callback?code=…"></textarea>
         <button class="action" type="submit">Finish sign-in</button>
         <div class="status" id="finish-status"></div>
+        <details class="hint">
+          <summary>Browser didn't open?</summary>
+          <a id="authorize-link" class="external" target="_blank" rel="noopener">Open Spotify sign-in</a>, or copy this link into your browser:
+          <textarea id="authorize-url" readonly rows="3"></textarea>
+          <button class="secondary" type="button" id="copy-authorize">Copy link</button>
+        </details>
       </form>
     </div>
   </section>
@@ -280,11 +303,17 @@ async function loadStatus() {
   const s = await api("/api/status");
   if (s.ok === false) return;
   $("#network-name").textContent = s.network_name;
+  document.querySelectorAll(".network-name").forEach((el) => (el.textContent = s.network_name));
   Object.assign(state, {
     wifi: s.wifi === "connected", ssid: s.wifi_ssid, spotify: s.spotify_signed_in,
     city: s.city, units: s.units, clock: s.clock, idle: s.idle_minutes, tides: s.tides,
   });
   $("#client-id").value = s.spotify_client_id || "";
+  // The app instructions are only needed the first time.
+  $("#spotify-help").open = !s.spotify_client_id;
+  // A sign-in waiting for its pasted address: go straight to the paste box.
+  // Starting a new one would cancel the approval already given.
+  if (s.spotify_pending_url && !s.spotify_signed_in) showPaste(s.spotify_pending_url);
   if (s.city) {
     const keep = $("#keep-place");
     keep.querySelector("span").textContent = `Keep ${s.city}`;
@@ -299,7 +328,15 @@ async function loadStatus() {
 }
 
 async function loadNetworks() {
+  // Step the dots (., .., ...) so the page doesn't look frozen meanwhile.
+  const waiting = $("#ssid-list").options[0];
+  let dots = 1;
+  const ticker = setInterval(() => {
+    dots = (dots % 3) + 1;
+    waiting.textContent = "Looking for networks" + ".".repeat(dots);
+  }, 400);
   const networks = await api("/api/networks");
+  clearInterval(ticker);
   const list = $("#ssid-list");
   list.innerHTML = "";
   for (const n of Array.isArray(networks) ? networks : []) {
@@ -322,7 +359,7 @@ $("#show-password").addEventListener("change", (e) => {
   $("#password").type = e.target.checked ? "text" : "password";
 });
 
-$("#wifi-form").addEventListener("submit", async (e) => {
+$("#wifi-form").addEventListener("submit", (e) => working(e, async () => {
   e.preventDefault();
   const form = e.target;
   const ssid = $("#ssid-list").value || $("#ssid-other").value.trim();
@@ -346,9 +383,39 @@ $("#wifi-form").addEventListener("submit", async (e) => {
     if (s.wifi === "failed") break;
   }
   setStatus($("#wifi-status"), `Couldn't connect to ${ssid}. Check the password and try again.`, "bad");
+}));
+
+// Show a spinner on the pressed button while its request runs, and ignore
+// taps until it's done. `task` runs at once, so it can still call
+// preventDefault.
+function working(e, task) {
+  const button = e.submitter || e.currentTarget;
+  if (button.classList.contains("busy")) {
+    e.preventDefault();
+    return;
+  }
+  button.classList.add("busy");
+  button.disabled = true;
+  return task().finally(() => {
+    button.classList.remove("busy");
+    button.disabled = false;
+  });
+}
+
+// The setup network has no internet, so pages on the internet have to open
+// in the phone's own browser, which uses mobile data, not in this window.
+// Android's sign-in window hands an intent:// link to the browser.
+const ANDROID = /Android/i.test(navigator.userAgent);
+function outside(url) {
+  if (!ANDROID) return url;
+  const u = new URL(url);
+  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(":", "")};end`;
+}
+document.querySelectorAll("a.external[href]").forEach((a) => {
+  a.href = outside(a.getAttribute("href"));
 });
 
-$("#spotify-start").addEventListener("submit", async (e) => {
+$("#spotify-start").addEventListener("submit", (e) => working(e, async () => {
   e.preventDefault();
   const reply = await api("/api/spotify/start", { client_id: $("#client-id").value });
   showErrors(e.target, reply.errors);
@@ -357,14 +424,33 @@ $("#spotify-start").addEventListener("submit", async (e) => {
     return;
   }
   setStatus($("#spotify-status"), "");
-  $("#authorize-link").href = reply.authorize_url;
-  $("#spotify-finish").classList.remove("hidden");
+  showPaste(reply.authorize_url);
   $("#callback-url").value = "";
   setStatus($("#finish-status"), "");
-  window.open(reply.authorize_url, "_blank");
+  // Straight to the browser: this window has no internet.
+  if (ANDROID) {
+    location.href = outside(reply.authorize_url);
+  } else {
+    window.open(reply.authorize_url, "_blank");
+  }
+}));
+
+function showPaste(authorizeUrl) {
+  $("#authorize-link").href = outside(authorizeUrl);
+  $("#authorize-url").value = authorizeUrl;
+  $("#spotify-finish").classList.remove("hidden");
+}
+
+$("#copy-authorize").addEventListener("click", () => {
+  const box = $("#authorize-url");
+  box.focus();
+  box.select();
+  // The clipboard API needs HTTPS, which the portal can't serve.
+  const copied = document.execCommand("copy");
+  $("#copy-authorize").textContent = copied ? "Copied" : "Select and copy the link above";
 });
 
-$("#spotify-finish").addEventListener("submit", async (e) => {
+$("#spotify-finish").addEventListener("submit", (e) => working(e, async () => {
   e.preventDefault();
   setStatus($("#finish-status"), "Signing in…");
   const reply = await api("/api/spotify/finish", { callback_url: $("#callback-url").value });
@@ -377,13 +463,13 @@ $("#spotify-finish").addEventListener("submit", async (e) => {
   state.spotify = true;
   refresh();
   openStep("#step-display");
-});
+}));
 
 $("#idle-minutes").addEventListener("input", (e) => {
   $("#idle-label").textContent = minutes(e.target.value);
 });
 
-$("#city-button").addEventListener("click", async () => {
+$("#city-button").addEventListener("click", (e) => working(e, async () => {
   const query = $("#city-search").value.trim();
   if (!query) return;
   const places = await api("/api/places?q=" + encodeURIComponent(query));
@@ -410,9 +496,9 @@ $("#city-button").addEventListener("click", async () => {
     label.append(input, " " + p.label);
     box.prepend(label);
   });
-});
+}));
 
-$("#display-form").addEventListener("submit", async (e) => {
+$("#display-form").addEventListener("submit", (e) => working(e, async () => {
   e.preventDefault();
   const form = e.target;
   const data = new URLSearchParams(new FormData(form));
@@ -442,9 +528,9 @@ $("#display-form").addEventListener("submit", async (e) => {
   refresh();
   openStep(nextStep());
   $("#finish").scrollIntoView({ behavior: "smooth" });
-});
+}));
 
-$("#done").addEventListener("click", async () => {
+$("#done").addEventListener("click", (e) => working(e, async () => {
   const reply = await api("/api/done", {});
   if (reply.ok) {
     setStatus($("#done-status"), "Done. On-Air is restarting. You can close this page.", "ok");
@@ -452,7 +538,7 @@ $("#done").addEventListener("click", async () => {
   } else {
     setStatus($("#done-status"), reply.message || "Something went wrong.", "bad");
   }
-});
+}));
 
 refresh();
 loadStatus();
