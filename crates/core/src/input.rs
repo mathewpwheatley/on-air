@@ -214,8 +214,8 @@ pub const KNOB_REPEAT_DELAY_MS: u64 = 400;
 /// ...then steps this often.
 pub const KNOB_REPEAT_MS: u64 = 100;
 
-/// Two buttons standing in for the knob until it's fitted, like the
-/// MatrixPortal's own UP and DOWN. A press turns a pretend knob one
+/// Two buttons that work as the knob, like the MatrixPortal's own UP and
+/// DOWN. A press turns a pretend knob one
 /// [`KNOB_STEP`], and holding repeats. [`Knob`] turns the position into a
 /// brightness, so the curve and floor are the same as the real knob's.
 pub struct KnobButtons {

@@ -8,7 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Instant, Timer};
+use embassy_time::Instant;
 use log::{info, warn};
 use on_air_core::app::CommandFailure;
 use on_air_core::settings::DEFAULT_IDLE_AFTER_MIN;
@@ -19,6 +19,7 @@ use crate::config::{self, Effective};
 use crate::https::HttpsClient;
 use crate::sntp_task;
 use crate::storage::SettingsStore;
+use crate::watchdog::{self, Watch};
 
 /// What the display needs to know from Spotify.
 pub enum SpotifyUpdate {
@@ -45,6 +46,18 @@ pub async fn spotify_task(
     store: Option<&'static SettingsStore>,
     settings: &'static Effective,
     seed: u32,
+) -> ! {
+    let watch = watchdog::watch("spotify", watchdog::NETWORK_TASK_MS);
+    run(watch, client, store, settings, seed).await;
+    watch.idle().await
+}
+
+async fn run(
+    watch: Watch,
+    client: &'static HttpsClient,
+    store: Option<&'static SettingsStore>,
+    settings: &'static Effective,
+    seed: u32,
 ) {
     let client_id = settings.settings.spotify_client_id.as_str();
     // The saved token first: it's the newest if Spotify has rotated it. Then,
@@ -67,11 +80,11 @@ pub async fn spotify_task(
 
     // Certificates can't be checked until the clock is set.
     while sntp_task::unix_seconds().is_none() {
-        Timer::after_millis(500).await;
+        watch.sleep(500).await;
     }
     for (source, token) in tokens {
         info!("spotify: signing in with the {source} refresh token");
-        follow(client, store, client_id, &token, seed).await;
+        follow(watch, client, store, client_id, &token, seed).await;
         warn!("spotify: Spotify rejected the {source} refresh token");
     }
     UPDATES.send(SpotifyUpdate::SignInNeeded).await;
@@ -85,7 +98,7 @@ pub async fn spotify_task(
         store
             .update(|saved| saved.spotify_refresh_token = None)
             .await;
-        Timer::after_secs(3).await;
+        watch.sleep(3_000).await;
         esp_hal::system::software_reset();
     }
     warn!("spotify: signed out; sign in again with `just sim --live` and rebuild");
@@ -93,6 +106,7 @@ pub async fn spotify_task(
 
 /// Follow Spotify with one refresh token, until Spotify rejects it.
 async fn follow(
+    watch: Watch,
     client: &HttpsClient,
     store: Option<&SettingsStore>,
     client_id: &str,
@@ -106,6 +120,7 @@ async fn follow(
         match sync.next(now()) {
             Next::Send(request) => {
                 let outcome = client.send(&request).await;
+                watch.check_in();
                 let mut outputs = Vec::new();
                 sync.handle(now(), outcome, &mut |output| outputs.push(output));
                 for output in outputs {
@@ -117,8 +132,7 @@ async fn follow(
                     }
                 }
             }
-            // Playback buttons will wake this early once they're fitted.
-            Next::Wait(ms) => Timer::after_millis(ms).await,
+            Next::Wait(ms) => watch.sleep(ms).await,
             Next::Stopped => return,
         }
     }

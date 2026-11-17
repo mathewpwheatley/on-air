@@ -40,8 +40,8 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self { tasks: Vec::new() }
     }
 
     /// Start watching a task, which has to check in at least every

@@ -128,8 +128,8 @@ where
     }
 }
 
-/// Bring-up test pattern: eight vertical color bars over a black-to-white
-/// ramp along the bottom 8 rows. Used in the simulator and for panel bring-up.
+/// A test pattern for checking a panel's colors and gamma: eight vertical
+/// color bars over a black-to-white ramp along the bottom 8 rows.
 pub fn draw_test_pattern<D>(target: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb888>,
@@ -165,7 +165,7 @@ where
     Ok(())
 }
 
-/// Bring-up addressing check: a white one-pixel border, a red block in the
+/// A test pattern for checking a panel's wiring: a white one-pixel border, a red block in the
 /// top-left corner, green top-right, blue bottom-left and white
 /// bottom-right, and a grey line across the middle. A mirrored, flipped or
 /// half-missing image shows at a glance; without the E address line, the

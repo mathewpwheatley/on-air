@@ -160,7 +160,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P6 Spotify on device | Software done, apart from seeing a token rotation saved. Playback buttons wait on the parts. |
 | P7 Setup portal | ✅ Works end to end on a Pixel 8. Factory reset by button and an iPhone still to try. |
 | P8 Idle screens | Weather and tides work on the panel. Saving the idle screen and the preview wait on the Mode button. |
-| P9 Polish | Host side done. The device side is not started. |
+| P9 Polish | In progress: crossfade and backoff done; watchdog and the boot-time log written. The current cap and the soak test to do. |
 
 ### P0 — Scaffolding (host) ✅
 
@@ -317,11 +317,11 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 ### P9 — Polish (M6)
 
-- [ ] Crossfade between covers (D-4).
-- [ ] Backoff everywhere (N-3).
-- [ ] Supervisor and watchdog (N-4).
+- [x] Crossfade between covers (D-4). The display starts `FramePipeline`'s 300 ms crossfade whenever a new cover arrives.
+- [x] Backoff everywhere (N-3). WiFi 1 s to 60 s (`WifiLink`), Spotify 2 s to 60 s plus `Retry-After` (`SpotifySync`), weather and the city lookup 30 s to 15 min, SNTP 5 s to 15 min.
+- [ ] Supervisor and watchdog (N-4). Written: `firmware/src/watchdog.rs` feeds the RTC watchdog (30 s, whole-chip reset) every 5 s while every watched task has checked in with `core::supervisor::Supervisor` (display and buttons within 5 s; Spotify, weather, WiFi and SNTP within 60 s, checking in through long waits). Test on the board: no resets while healthy.
 - [ ] Tune the current cap against the P3 measurements.
-- [ ] Boot-time check (N-2).
+- [ ] Boot-time check (N-2). The display logs `boot: first cover after N ms`; read it on the board.
 - [ ] **Soak test:** run for 48 h, unplugging the router a few times and blocking Spotify.
 
 **Done when:** it survives the soak test with no manual reboot, and every requirement in requirements.md is checked off.

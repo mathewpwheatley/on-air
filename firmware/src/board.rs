@@ -33,7 +33,7 @@ macro_rules! panel_pins {
 }
 
 /// The board's UP and DOWN buttons, next to the USB port. Active low.
-/// They stand in for the brightness knob until it's fitted.
+/// They turn the brightness up and down; holding both opens the setup portal.
 pub fn knob_buttons(up: GPIO6<'static>, down: GPIO7<'static>) -> [Input<'static>; 2] {
     let config = InputConfig::default().with_pull(Pull::Up);
     [Input::new(up, config), Input::new(down, config)]

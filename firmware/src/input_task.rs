@@ -7,6 +7,7 @@ use esp_hal::gpio::Input;
 use log::info;
 use on_air_core::input::{ADC_MAX, DEFAULT_FLOOR, KnobButtons, POLL_INTERVAL_MS};
 
+use crate::watchdog;
 use crate::wifi_task::{self, WifiCommand};
 
 /// The latest panel brightness, 0–255.
@@ -19,7 +20,9 @@ pub static BRIGHTNESS: Signal<CriticalSectionRawMutex, u8> = Signal::new();
 pub async fn knob_buttons_task(buttons: [Input<'static>; 2]) -> ! {
     let mut knob = KnobButtons::new(DEFAULT_FLOOR, ADC_MAX / 4 * 3);
     let mut ticker = Ticker::every(Duration::from_millis(POLL_INTERVAL_MS));
+    let watch = watchdog::watch("buttons", watchdog::FAST_TASK_MS);
     loop {
+        watch.check_in();
         let pressed = buttons.each_ref().map(Input::is_low);
         let now = Instant::now().as_millis();
         if let Some(level) = knob.update(pressed, now) {

@@ -10,11 +10,13 @@ use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpAddress, Stack};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embassy_time::{Duration, Instant, with_timeout};
 use log::{info, warn};
 use on_air_core::backoff::Backoff;
 use on_air_core::clock::{Clock, RESYNC_MS};
 use on_air_core::timezone::{self, TimeZone};
+
+use crate::watchdog;
 use sntpc::{NtpContext, NtpTimestampGenerator};
 use sntpc_net_embassy::UdpSocketWrapper;
 
@@ -70,14 +72,20 @@ pub async fn sntp_task(stack: Stack<'static>, seed: u32) -> ! {
     socket.bind(NTP_PORT).expect("SNTP port already in use");
     let socket = UdpSocketWrapper::new(socket);
 
+    let watch = watchdog::watch("time sync", watchdog::NETWORK_TASK_MS);
     let mut backoff = Backoff::time_sync();
     let mut random = seed;
     loop {
-        stack.wait_config_up().await;
-        match sync(stack, &socket).await {
+        // Waiting for the network counts as fine; the WiFi task is watched.
+        while !stack.is_config_up() {
+            watch.sleep(1_000).await;
+        }
+        let synced = sync(stack, &socket).await;
+        watch.check_in();
+        match synced {
             Ok(()) => {
                 backoff.reset();
-                Timer::after_millis(RESYNC_MS).await;
+                watch.sleep(RESYNC_MS).await;
             }
             Err(reason) => {
                 let delay_ms = backoff.next_delay_from(&mut random);
@@ -85,7 +93,7 @@ pub async fn sntp_task(stack: Stack<'static>, seed: u32) -> ! {
                     "time: sync failed ({reason}), retrying in {} s",
                     delay_ms / 1000
                 );
-                Timer::after_millis(delay_ms as u64).await;
+                watch.sleep(delay_ms as u64).await;
             }
         }
     }

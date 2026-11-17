@@ -24,6 +24,8 @@ use on_air_core::app::NetStatus;
 use on_air_core::portal::{self, Network, WifiState};
 use on_air_core::wifi::{JOIN_ATTEMPT_MS, WifiEvent, WifiLink, WifiNext};
 
+use crate::watchdog;
+
 /// Requests for the radio, from the portal and the buttons.
 pub enum WifiCommand {
     /// The owner held the buttons to reopen setup.
@@ -52,6 +54,9 @@ pub fn status() -> NetStatus {
 fn publish(link: &WifiLink) {
     STATUS.lock(|status| status.set(link.status()));
 }
+
+/// Wake this often while waiting, to check in with the watchdog.
+const CHECK_IN_MS: u64 = 5_000;
 
 fn now() -> u64 {
     Instant::now().as_millis()
@@ -114,7 +119,9 @@ pub async fn wifi_task(
         warn!("wifi: couldn't start the radio: {error:?}");
     }
 
+    let watch = watchdog::watch("wifi", watchdog::NETWORK_TASK_MS);
     loop {
+        watch.check_in();
         let wait_ms = match link.next(now()) {
             WifiNext::Join => {
                 info!("wifi: joining {ssid}");
@@ -144,12 +151,9 @@ pub async fn wifi_task(
         };
 
         let connected = controller.is_connected();
-        let timer = async {
-            match wait_ms {
-                Some(ms) => Timer::after_millis(ms).await,
-                None => core::future::pending().await,
-            }
-        };
+        // Wake at least every few seconds to check in; `link.next` works out
+        // how much of a longer wait is left.
+        let timer = Timer::after_millis(wait_ms.unwrap_or(CHECK_IN_MS).min(CHECK_IN_MS));
         let dropped = async {
             if connected {
                 let _ = controller.wait_for_disconnect_async().await;

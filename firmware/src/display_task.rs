@@ -34,7 +34,7 @@ use crate::config::Effective;
 use crate::input_task::BRIGHTNESS;
 use crate::spotify_task::{self, SpotifyUpdate};
 use crate::weather_task::{self, WeatherUpdate};
-use crate::{https, sntp_task, wifi_task};
+use crate::{https, sntp_task, watchdog, wifi_task};
 
 const COLUMNS: usize = on_air_ui::WIDTH as usize;
 const ROWS: usize = on_air_ui::HEIGHT as usize;
@@ -111,8 +111,11 @@ pub async fn display_task(
     let mut sign_in_url: Option<String> = None;
     let mut stats_from = (Instant::now(), hub75.frame_count());
     let mut ticker = Ticker::every(Duration::from_millis(FRAME_MS));
+    let watch = watchdog::watch("display", watchdog::FAST_TASK_MS);
+    let mut first_cover_logged = false;
 
     loop {
+        watch.check_in();
         let now = Instant::now().as_millis();
         if let Some(level) = BRIGHTNESS.try_take() {
             brightness = level;
@@ -123,6 +126,11 @@ pub async fn display_task(
                 SpotifyUpdate::Art(cover) => {
                     if cover.is_some() {
                         pipeline.start_crossfade(now);
+                        // How long boot took to show music.
+                        if !first_cover_logged {
+                            first_cover_logged = true;
+                            info!("boot: first cover after {} ms", now);
+                        }
                     }
                     art = cover;
                 }

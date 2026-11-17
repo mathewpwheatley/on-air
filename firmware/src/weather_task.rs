@@ -8,7 +8,7 @@ use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Instant, Timer};
+use embassy_time::Instant;
 use log::{info, warn};
 use on_air_core::backoff::Backoff;
 use on_air_core::http::Request;
@@ -21,6 +21,7 @@ use crate::config::Effective;
 use crate::https::HttpsClient;
 use crate::sntp_task;
 use crate::storage::SettingsStore;
+use crate::watchdog::{self, Watch};
 
 /// What the display needs to know about the weather.
 pub enum WeatherUpdate {
@@ -46,6 +47,18 @@ pub async fn weather_task(
     store: Option<&'static SettingsStore>,
     settings: &'static Effective,
     seed: u32,
+) -> ! {
+    let watch = watchdog::watch("weather", watchdog::NETWORK_TASK_MS);
+    run(watch, client, store, settings, seed).await;
+    watch.idle().await
+}
+
+async fn run(
+    watch: Watch,
+    client: &'static HttpsClient,
+    store: Option<&'static SettingsStore>,
+    settings: &'static Effective,
+    seed: u32,
 ) {
     let looked_up = settings.city_to_look_up();
     if settings.settings.weather.is_none() && looked_up.is_none() {
@@ -54,13 +67,13 @@ pub async fn weather_task(
     }
     // Certificates can't be checked until the clock is set.
     while sntp_task::unix_seconds().is_none() {
-        Timer::after_millis(500).await;
+        watch.sleep(500).await;
     }
 
     let (location, tides) = match (&settings.settings.weather, looked_up) {
         (Some(location), _) => (location.clone(), settings.settings.tides),
         (None, Some(city)) => {
-            let location = look_up(client, city, seed).await;
+            let location = look_up(watch, client, city, seed).await;
             if let Some(store) = store {
                 let saved = location.clone();
                 store
@@ -77,13 +90,16 @@ pub async fn weather_task(
     let city = location.city.as_str();
     UPDATES.send(WeatherUpdate::TideSupport(tides)).await;
 
-    let mut idle_mode = IDLE_MODE.wait().await;
+    // `watch.idle()` never ends, so this waits for the display's first
+    // idle screen while checking in.
+    let Either::Second(mut idle_mode) = select(watch.idle(), IDLE_MODE.wait()).await;
     let units = settings.settings.units;
     let mut sync = WeatherSync::new(location.lat, location.lon, units, tides, idle_mode, seed);
     loop {
         match sync.next(now()) {
             Next::Send(request) => {
                 let outcome = client.send(&request).await;
+                watch.check_in();
                 let mut outputs = Vec::new();
                 sync.handle(now(), outcome, &mut |output| outputs.push(output));
                 for output in outputs {
@@ -111,15 +127,14 @@ pub async fn weather_task(
                 }
             }
             Next::Wait(ms) => {
-                if let Either::Second(mode) =
-                    select(Timer::after_millis(ms), IDLE_MODE.wait()).await
-                {
+                if let Either::Second(mode) = select(watch.sleep(ms), IDLE_MODE.wait()).await {
                     idle_mode = mode;
                     sync.set_idle_mode(idle_mode);
                 }
             }
             Next::Idle => {
-                idle_mode = IDLE_MODE.wait().await;
+                let Either::Second(mode) = select(watch.idle(), IDLE_MODE.wait()).await;
+                idle_mode = mode;
                 sync.set_idle_mode(idle_mode);
             }
         }
@@ -127,13 +142,14 @@ pub async fn weather_task(
 }
 
 /// The city's position, retrying with backoff until the lookup gets through.
-async fn look_up(client: &HttpsClient, city: &str, seed: u32) -> WeatherLocation {
+async fn look_up(watch: Watch, client: &HttpsClient, city: &str, seed: u32) -> WeatherLocation {
     let mut backoff = Backoff::weather();
     let mut random = seed | 1;
     loop {
         let found = client
             .send(&Request::get(weather::geocoding_url(city, 1)))
             .await
+            .inspect(|_| watch.check_in())
             .ok()
             .filter(|response| response.status == 200)
             .and_then(|response| weather::parse_geocoding(&response.body).ok());
@@ -160,6 +176,6 @@ async fn look_up(client: &HttpsClient, city: &str, seed: u32) -> WeatherLocation
             "weather: city lookup failed, retrying in {} s",
             delay_ms / 1000
         );
-        Timer::after_millis(delay_ms as u64).await;
+        watch.sleep(delay_ms as u64).await;
     }
 }

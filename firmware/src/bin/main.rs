@@ -20,7 +20,7 @@ use on_air_core::settings::Settings;
 use on_air_firmware::config::{self, Effective};
 use on_air_firmware::{
     board, display_task, https, input_task, setup_network, sntp_task, spotify_task, storage,
-    weather_task, wifi_task,
+    watchdog, weather_task, wifi_task,
 };
 use static_cell::StaticCell;
 use tinyrlibc as _;
@@ -62,6 +62,9 @@ async fn main(spawner: Spawner) -> ! {
     // region showed no use.
     esp_alloc::heap_allocator!(size: 32 * 1024);
 
+    // The hardware watchdog, fed while every task checks in.
+    let rwdt = esp_hal::rtc_cntl::Rtc::new(peripherals.LPWR).rwdt;
+
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let software_interrupts = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, software_interrupts.software_interrupt0);
@@ -73,6 +76,8 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     info!("PSRAM: {} KB", psram_size / 1024);
+
+    spawner.spawn(watchdog::supervisor_task(rwdt).expect("supervisor already running"));
 
     // The settings to run with: saved by the setup portal, or in
     // development filled in from `.env`.
