@@ -47,6 +47,15 @@ embassy-futures = "0.1.2"
 # SNTP. 0.8 is the version that pairs with embassy-net 0.8.
 sntpc = { version = "0.8", default-features = false }
 sntpc-net-embassy = { version = "0.8", features = ["log"] }
+# TLS. 0.2 is the release built against esp-hal 1.1.
+# hook-wall-clock lets mbedtls check certificate dates against our SNTP
+# clock. It means building mbedtls from source; use-gcc does that with the
+# ESP toolchain's Xtensa GCC, since Apple's clang can't target Xtensa.
+mbedtls-rs = { version = "0.2", features = ["esp32s3", "log", "embassy-time", "hook-wall-clock", "use-gcc"] }
+rand_core = "0.10.1"
+heapless = "0.9"
+# C library functions that mbedtls needs.
+tinyrlibc = { version = "0.5", default-features = false, features = ["memchr"] }
 # trail-blank-2 blanks the panel briefly after each row change, against ghosting.
 esp-hub75 = { version = "0.15", features = ["esp32s3", "log", "trail-blank-2"] }
 embedded-graphics = "0.8.2"

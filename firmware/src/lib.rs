@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod board;
 pub mod display_task;
+pub mod https_check;
 pub mod input_task;
 pub mod sntp_task;
 pub mod wifi_task;

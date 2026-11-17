@@ -16,8 +16,9 @@ use log::info;
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use esp_hal::rng::Rng;
-use on_air_firmware::{board, display_task, input_task, sntp_task, wifi_task};
+use on_air_firmware::{board, display_task, https_check, input_task, sntp_task, wifi_task};
 use static_cell::StaticCell;
+use tinyrlibc as _;
 
 use esp_backtrace as _;
 
@@ -65,7 +66,7 @@ async fn main(spawner: Spawner) -> ! {
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");
     let rng = Rng::new();
-    static NET_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
+    static NET_RESOURCES: StaticCell<StackResources<6>> = StaticCell::new();
     let net_seed = (rng.random() as u64) << 32 | rng.random() as u64;
     let (stack, net_runner) = embassy_net::new(
         interfaces.station,
@@ -78,6 +79,7 @@ async fn main(spawner: Spawner) -> ! {
         wifi_task::wifi_task(wifi_controller, rng.random()).expect("wifi task already running"),
     );
     spawner.spawn(sntp_task::sntp_task(stack, rng.random()).expect("sntp task already running"));
+    spawner.spawn(https_check::https_check_task(stack).expect("https check already running"));
 
     let knob_buttons = board::knob_buttons(peripherals.GPIO6, peripherals.GPIO7);
     spawner.spawn(

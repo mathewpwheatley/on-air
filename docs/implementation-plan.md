@@ -156,7 +156,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 | P2 UI + simulator | ✅ Done |
 | P3 Panel bring-up | ✅ Panel works. The current and temperature measurements are still to do. |
 | P4 Inputs | Waiting on the buttons and knob. UP and DOWN stand in for the knob. |
-| P5 Network + TLS | In progress. WiFi, PSRAM and SNTP work; TLS and AP+STA to do. |
+| P5 Network + TLS | In progress. WiFi, PSRAM, SNTP and TLS work; AP+STA and a retest of `api.open-meteo.com` to do. |
 | P6 Spotify on device | Not started. The logic is done in core. |
 | P7 Setup portal | Host side done. The device side is not started. |
 | P8 Idle screens | Not started. The screens and weather logic are done on the host. |
@@ -239,11 +239,19 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 - [x] Join WiFi from hard-coded credentials (in a git-ignored `.env`, read at build time). `wifi_task` runs `core::wifi::WifiLink`, with `ON_AIR_WIFI_SSID` and `ON_AIR_WIFI_PASSWORD` from `.env`, and gets an address over DHCP.
 - [x] Move the heap to PSRAM. The board has 2 MB (quad SPI), added to the heap at boot.
 - [x] SNTP time. `sntp_task` syncs from `pool.ntp.org` once online and every 4 h, retrying with backoff; `core::clock` holds the offset. `sntpc` 0.8 is the version for embassy-net 0.8, so the firmware moved up from 0.7.
-- [ ] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on.
+- [x] **TLS decision (R-2):** try `esp-mbedtls` first, since it has fuller certificate checks and supports TLS 1.2. Fall back to `embedded-tls` only if memory is too tight. Check all five hosts in R-2 with certificate verification on. Decided: `mbedtls-rs`, which is what esp-mbedtls now publishes. Four of five hosts pass; see the notes.
+- [ ] Retest `api.open-meteo.com`. On 2026-11-16 its TLS handshake never completed, from the Mac (`curl`, `openssl`) as well as the board, so the cause is that server or the network path. A reboot reruns the check.
 - [ ] **AP+STA spike (P-4):** keep a soft AP up while joined to home WiFi.
 
 **Notes so far (2026-11-16):**
 - **Memory at boot**, with WiFi up and the test patterns running: the 72 KB internal region is 96% used (2.5 KB free), the extra 96 KB region has 72 KB free, and PSRAM's 2 MB is untouched. The allocator fills internal RAM first, so TLS buffers, JSON and covers should go to PSRAM explicitly (an allocator with `MemoryCapability::External`), keeping internal RAM for WiFi and DMA.
+- **TLS** uses `mbedtls-rs` 0.2, the release built against `esp-hal` 1.1. The newest `reqwless` needs Rust 1.91 and the older one uses `embedded-io` 0.6, so neither fits; the check writes its GET by hand over the session, and the real tasks will pick an HTTP layer in P6 (`edge-http` 0.7 matches `embedded-io` 0.7).
+  - **Certificates** are verified against five pinned roots in `firmware/certs/roots.pem` (see its README), with dates checked against the SNTP clock. That needs mbedtls built from source, which the `use-gcc` feature does with the ESP toolchain's Xtensa GCC; Apple's clang can't target Xtensa.
+  - **Randomness** comes from esp-hal's `Rng`, a true random source while the radio is on, rather than `TrngSource`, which would hold ADC1 that the knob needs.
+  - **Results**, software crypto: `accounts.spotify.com` 200 in 0.8–1.2 s, `api.spotify.com` 401 (expected, no sign-in) in 0.9–1.2 s, `i.scdn.co` 200 in 1.4–1.9 s, `geocoding-api.open-meteo.com` 200 but in 21.6 s (0.6 s from the Mac; probably held up behind the failed `api.open-meteo.com` socket, so look at it in P8), `api.open-meteo.com` failed as above.
+  - **Memory:** each session's memory is freed when it closes, so the heap is back to its starting point after the checks, and PSRAM is still untouched. The peak during a handshake hasn't been measured.
+  - **Code size:** mbedtls adds about 470 KB; the firmware is about 1 MB of the 8 MB flash.
+  - **Later:** the chip's SHA, RSA and AES hardware can speed up handshakes (`mbedtls_rs::sys::hook::backend::esp::EspAccel`).
 - **Current cap seen working:** full white at brightness 150 is capped to 137, matching the 2150 mA budget under the 4000 mA full-white estimate.
 
 **Done when:**
@@ -259,6 +267,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
   - [ ] polling on `core::schedule`
   - [ ] art download, decode and display
 - [ ] Playback buttons, with a "Premium needed" icon on 403.
+- [ ] Tell certificate failures (expired, untrusted root, wrong host name) apart from network failures, log the host and reason, and show an "Update needed" status notice on the panel, so a host moving to an unpinned root shows as a firmware problem rather than a WiFi one.
 - [ ] Save rotated refresh tokens to `storage`.
 
 **Done when:** the panel follows real playback within the N-1 latency targets, and the buttons control Spotify.
@@ -311,7 +320,7 @@ Each phase lists its tasks and when it counts as done. Ticked tasks are finished
 
 | # | Decision | When | Leaning |
 |---|---|---|---|
-| 1 | TLS library (R-2) | P5 | `esp-mbedtls` |
+| 1 | TLS library (R-2) | Done | Decided: `mbedtls-rs` (the published form of `esp-mbedtls`), with pinned roots and certificate dates checked. |
 | 2 | JSON parsing: `serde_json` + `alloc` or `serde-json-core` | Done | Decided: `serde_json` + `alloc`. The heap is in PSRAM anyway and it's simpler. |
 | 3 | Timezone entry in the portal | Done | Decided: the timezone comes from the city picked in the portal. Open-Meteo geocoding returns an IANA name, which `jiff`'s bundled database uses directly. |
 | 4 | Logging: `log` + `esp-println` or `defmt` | Done | Decided: `log`, since it's easier. Switch to `defmt` only if log size or speed becomes a problem. |
