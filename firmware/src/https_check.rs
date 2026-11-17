@@ -135,11 +135,19 @@ async fn get(
     path: &str,
 ) -> Result<heapless::String<64>, &'static str> {
     let host_name = host.to_str().map_err(|_| "bad host name")?;
+    let mut lap = Instant::now();
+    // Milliseconds since the previous stage ended.
+    let mut stage = || {
+        let ms = lap.elapsed().as_millis();
+        lap = Instant::now();
+        ms
+    };
     let addresses = stack
         .dns_query(host_name, DnsQueryType::A)
         .await
         .map_err(|_| "DNS lookup failed")?;
     let address = *addresses.first().ok_or("DNS found no address")?;
+    let dns_ms = stage();
 
     let mut rx_buffer = [0u8; 4096];
     let mut tx_buffer = [0u8; 2048];
@@ -149,6 +157,7 @@ async fn get(
         .connect((address, 443))
         .await
         .map_err(|_| "TCP connect failed")?;
+    let connect_ms = stage();
 
     let config = ClientSessionConfig {
         ca_chain: Some(Certificate::new(X509::PEM(ROOTS)).map_err(|_| "bad root certificates")?),
@@ -161,6 +170,7 @@ async fn get(
         .connect()
         .await
         .map_err(|_| "TLS handshake failed (certificate or protocol)")?;
+    let handshake_ms = stage();
 
     let request = [
         "GET ",
@@ -189,7 +199,13 @@ async fn get(
         }
         filled += read;
     }
+    let response_ms = stage();
     let _ = session.close().await;
+    let close_ms = stage();
+    info!(
+        "https: {host_name} stages: DNS {dns_ms} ms, connect {connect_ms} ms, \
+         handshake {handshake_ms} ms, response {response_ms} ms, close {close_ms} ms"
+    );
     let line = buffer[..filled]
         .split(|&b| b == b'\r' || b == b'\n')
         .next()
